@@ -131,6 +131,49 @@ This mirrors Andrej Karpathy's continuous-learning thesis: durable agent improve
 
 The companion skill is `~/.claude/skills/briefingdeck-spawn-team/SKILL.md`.
 
+## Agency-Swarm Layer
+
+Adapted from [VRSEN/agency-swarm](https://github.com/VRSEN/agency-swarm) (MIT). Octogent's existing parent-worker spawn pattern is great for "spawn 3 workers, merge their branches"; it does not, on its own, support "ask 5 specialists the same question and pick the best answer." The Agency-Swarm Layer adds three lifts on top of the existing terminal + channel surface, all 100% Claude-native — no Python, no OpenAI Assistants API.
+
+### Concepts
+
+| Lift | What it is | File |
+|---|---|---|
+| **`agency_chart`** | A first-class declarative JSON topology — `entryPoints`, `flows: [{from, to}]`, `sharedInstructions`. Diffable, versionable, validated. | `packages/core/src/domain/agencyChart.ts`, example at `/root/briefingdeck/.octogent/agency-chart.json` |
+| **Voting coordinator** | New prompt template `swarm-vote-parent.md` that fans one question to every specialist, scores replies on groundedness + specificity + cost, picks the winner, writes a JSON artifact. | `prompts/swarm-vote-parent.md` |
+| **`AGENCY.md` shared instructions** | One markdown file prepended to every specialist's system prompt at spawn time. Carries mission + toolchain + DONE/BLOCKED contract. Mirrors agency-swarm's `shared_instructions=...` semantics from `agency/core.py:152-161`. | `/root/briefingdeck/.octogent/AGENCY.md` |
+
+### CLI surface
+
+```bash
+# Validate a chart before spawning.
+bash bin/agency-chart.sh --validate /root/briefingdeck/.octogent/agency-chart.json
+
+# Spawn a vote team. Coord uses swarm-vote-parent; chart is validated first.
+bash bin/spawn-team.sh \
+  --topic "ADK Python vs LangGraph for D2?" \
+  --tentacle agents \
+  --roles "research,builder,reviewer,synthesizer,planner" \
+  --vote \
+  --chart /root/briefingdeck/.octogent/agency-chart.json
+```
+
+`--dry-run --vote` prints the channel-send commands the coord would issue, without spawning live Claude Code processes — safe for CI / smoke tests.
+
+### Validator
+
+`validateChart()` rejects: missing entrypoints, missing shared instructions, empty flows, self-edges, duplicate edges, dangling entrypoint references, and cycles (DFS three-color). 11 vitest cases at `packages/core/tests/agencyChart.test.ts`.
+
+### Vote artifact
+
+Each completed vote writes `~/.octogent/projects/<projectId>/votes/<voteId>.json` with `{ question, specialists, responses: [{specialist, response, score, cost_usd}], winner, rationale }`. These artifacts are observable (replay), and become DPO training pairs for the claude-brain GEPA reflection loop (winner = `chosen`, runners-up = `rejected`).
+
+### Attribution
+
+Single attribution comment per file: `# Adapted from VRSEN/agency-swarm (MIT)`. Concepts lifted: `agency_chart` (`agency/setup.py:27-262`), `SendMessage` description-build pattern (`tools/send_message.py:87-180`), `shared_instructions` prepend (`agency/core.py:152-161`). No verbatim Python ported. Both projects are MIT, no obligations beyond the attribution lines.
+
+The companion skill is `~/.claude/skills/briefingdeck-agency-vote/SKILL.md`.
+
 ## Roadmap
 
 Possible next integrations, in rough order of value:

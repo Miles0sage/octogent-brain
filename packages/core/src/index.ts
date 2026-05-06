@@ -2,6 +2,7 @@ export * from "./application/buildTerminalList";
 export * from "./adapters/InMemoryTerminalSnapshotReader";
 export * from "./domain/terminal";
 export * from "./domain/deck";
+export * from "./domain/agencyChart";
 export * from "./domain/agentRuntime";
 export * from "./domain/channel";
 export * from "./domain/completionSound";
