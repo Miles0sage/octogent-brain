@@ -10,6 +10,11 @@ import type { CodexUsageSnapshot } from "../codexUsage";
 import type { GitHubRepoSummarySnapshot } from "../githubRepoSummary";
 import { logVerbose } from "../logging";
 import type { MonitorService } from "../monitor";
+import {
+  handleClaudeBrainDaemonsRoute,
+  handleClaudeBrainDpoRecentRoute,
+  handleClaudeBrainMemoryRoute,
+} from "./claudeBrainRoutes";
 import { handleCodeIntelEventsRoute } from "./codeIntelRoutes";
 import {
   handleConversationExportRoute,
@@ -154,6 +159,14 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
   ],
   ["tentacles", [handleTentacleGitRoute, handleTentacleGitPullRequestRoute]],
   ["code-intel", [handleCodeIntelEventsRoute]],
+  [
+    "claude-brain",
+    [
+      handleClaudeBrainDaemonsRoute,
+      handleClaudeBrainDpoRecentRoute,
+      handleClaudeBrainMemoryRoute,
+    ],
+  ],
 ]);
 
 const extractRoutePrefix = (pathname: string): string | null => {

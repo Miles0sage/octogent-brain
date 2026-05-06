@@ -16,7 +16,14 @@
 
 </div>
 
-# Octogent
+# Octogent (claude-brain fork)
+
+> **Fork notice.** This is a `claude-brain`-extended fork of
+> [`hesamsheikh/octogent`](https://github.com/hesamsheikh/octogent) by Hesam Sheikhalishahi.
+> All upstream features remain intact. Additions are documented in
+> [`CLAUDE_BRAIN_INTEGRATION.md`](./CLAUDE_BRAIN_INTEGRATION.md): three new
+> `/api/claude-brain/*` endpoints, a `Brain` panel surfacing the self-improvement
+> daemons, and a small host-bind patch for Tailscale exposure. MIT license preserved.
 
 It's really not fun to have **ten Claude Code sessions open at once**, constantly switching between them and trying to remember what each one was supposed to do. *Things get blurry fast* when one agent is doing documentation, another is touching the database, another is changing the API, and another is somewhere in the frontend. **Octogent** tries to fix that by giving each job its own <u>scoped context, notes, and task list</u>, while also making it possible for Claude Code to **spawn other Claude Code agents**, assign them work, and communicate with them.
 

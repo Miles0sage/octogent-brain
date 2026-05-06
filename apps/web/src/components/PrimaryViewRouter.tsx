@@ -4,6 +4,7 @@ import type { PrimaryNavIndex } from "../app/constants";
 import type { UseMonitorRuntimeResult } from "../app/hooks/useMonitorRuntime";
 import { ActivityPrimaryView } from "./ActivityPrimaryView";
 import { CanvasPrimaryView } from "./CanvasPrimaryView";
+import { ClaudeBrainDaemons } from "./ClaudeBrainDaemons";
 import { CodeIntelPrimaryView } from "./CodeIntelPrimaryView";
 import { ConversationsPrimaryView } from "./ConversationsPrimaryView";
 import { DeckPrimaryView } from "./DeckPrimaryView";
@@ -93,6 +94,10 @@ export const PrimaryViewRouter = ({
 
   if (activePrimaryNav === 8) {
     return <SettingsPrimaryView {...settingsPrimaryViewProps} />;
+  }
+
+  if (activePrimaryNav === 9) {
+    return <ClaudeBrainDaemons />;
   }
 
   return <CanvasPrimaryView {...canvasPrimaryViewProps} />;

@@ -436,14 +436,15 @@ export const App = () => {
 
       <section className="console-main-canvas" aria-label="Main content canvas">
         <div
-          className={`workspace-shell${isAgentsSidebarVisible && activePrimaryNav !== 1 && activePrimaryNav !== 3 && activePrimaryNav !== 4 && activePrimaryNav !== 5 && activePrimaryNav !== 8 ? "" : " workspace-shell--full"}`}
+          className={`workspace-shell${isAgentsSidebarVisible && activePrimaryNav !== 1 && activePrimaryNav !== 3 && activePrimaryNav !== 4 && activePrimaryNav !== 5 && activePrimaryNav !== 8 && activePrimaryNav !== 9 ? "" : " workspace-shell--full"}`}
         >
           {isAgentsSidebarVisible &&
             activePrimaryNav !== 1 &&
             activePrimaryNav !== 3 &&
             activePrimaryNav !== 4 &&
             activePrimaryNav !== 5 &&
-            activePrimaryNav !== 8 && (
+            activePrimaryNav !== 8 &&
+            activePrimaryNav !== 9 && (
               <ActiveAgentsSidebar
                 sidebarWidth={sidebarWidth}
                 onSidebarWidthChange={(width) => {

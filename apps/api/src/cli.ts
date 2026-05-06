@@ -240,7 +240,7 @@ const startServer = async () => {
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
 
-  const { host, port: activePort } = await apiServer.start(port, "127.0.0.1");
+  const { host, port: activePort } = await apiServer.start(port, process.env.HOST ?? "127.0.0.1");
   const apiBaseUrl = `http://${host}:${activePort}`;
   writeRuntimeMetadata(projectStateDir, {
     apiBaseUrl,

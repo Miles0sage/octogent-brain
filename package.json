@@ -4,14 +4,17 @@
   "description": "Web-first command surface for running multiple coding agents in parallel",
   "license": "MIT",
   "type": "module",
-  "packageManager": "pnpm@10.4.1",
   "engines": {
     "node": ">=22.0.0"
   },
   "bin": {
     "octogent": "./bin/octogent"
   },
-  "files": ["bin", "dist", "README.md"],
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "start": "pnpm dev",
     "dev": "node scripts/dev.mjs",
