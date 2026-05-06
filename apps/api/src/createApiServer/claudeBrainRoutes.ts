@@ -21,21 +21,23 @@ const TRACKED_DAEMONS: ReadonlyArray<{ name: string; kind: "timer" | "service" }
 
 const SYSTEMCTL_TIMEOUT_MS = 1500;
 
-// Convert systemd's microseconds-since-epoch property output to ISO-8601.
-// Format examples:
-//   LastTriggerUSec=Sun 2026-05-04 04:30:00 UTC
-//   LastTriggerUSec=n/a
-//   NextElapseUSecRealtime=Mon 2026-05-06 04:30:00 UTC
+// systemctl emits human-formatted timestamps like "Wed 2026-05-06 07:00:01 CEST".
+// Node's Date.parse cannot handle weekday-prefixed strings or non-RFC TZ abbreviations
+// (CEST, CET, PST, ...). GNU `date -d` is the canonical resolver — it consults the
+// host's tzdata. We delegate to it and emit the result in UTC ISO-8601.
 const parseSystemdTime = (value: string | undefined): string | null => {
   if (!value || value === "n/a" || value === "0") {
     return null;
   }
-  // Try Date.parse first (handles common locale formats like "Sun 2026-05-04 04:30:00 UTC").
-  const parsed = Date.parse(value);
-  if (!Number.isNaN(parsed)) {
-    return new Date(parsed).toISOString();
+  const result = spawnSync("date", ["-d", value, "-u", "+%s"], {
+    encoding: "utf8",
+    timeout: SYSTEMCTL_TIMEOUT_MS,
+  });
+  const stdout = (result.stdout ?? "").trim();
+  if (result.status !== 0 || !/^\d+$/.test(stdout)) {
+    return null;
   }
-  return null;
+  return new Date(Number.parseInt(stdout, 10) * 1000).toISOString();
 };
 
 type SystemctlShowResult = {

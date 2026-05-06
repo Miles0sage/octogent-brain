@@ -30,9 +30,11 @@ const buildResponse = (): ResponseLike => {
 };
 
 const buildRequest = (url: string) => {
+  const response = buildResponse();
   return {
     request: { method: "GET" } as unknown as import("node:http").IncomingMessage,
-    response: buildResponse(),
+    response: response as unknown as import("node:http").ServerResponse,
+    responseStub: response,
     requestUrl: new URL(url),
     corsOrigin: null,
   };
@@ -61,7 +63,7 @@ describe("claude-brain dpo-recent route", () => {
     const ctx = buildRequest("http://x.test/api/claude-brain/dpo-recent");
     const handled = await handleClaudeBrainDpoRecentRoute(ctx, {} as never);
     expect(handled).toBe(true);
-    const body = JSON.parse((ctx.response as ResponseLike).body) as {
+    const body = JSON.parse(ctx.responseStub.body) as {
       files: unknown[];
       total_pairs: number;
       note?: string;
@@ -87,7 +89,7 @@ describe("claude-brain dpo-recent route", () => {
     const ctx = buildRequest("http://x.test/api/claude-brain/dpo-recent?days=7");
     const handled = await handleClaudeBrainDpoRecentRoute(ctx, {} as never);
     expect(handled).toBe(true);
-    const body = JSON.parse((ctx.response as ResponseLike).body) as {
+    const body = JSON.parse(ctx.responseStub.body) as {
       files: Array<{ date: string | null; line_count: number }>;
       total_pairs: number;
     };
