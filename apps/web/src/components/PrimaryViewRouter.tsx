@@ -5,6 +5,7 @@ import type { UseMonitorRuntimeResult } from "../app/hooks/useMonitorRuntime";
 import { ActivityPrimaryView } from "./ActivityPrimaryView";
 import { CanvasPrimaryView } from "./CanvasPrimaryView";
 import { ClaudeBrainDaemons } from "./ClaudeBrainDaemons";
+import { ClaudeBrainRollouts } from "./ClaudeBrainRollouts";
 import { CodeIntelPrimaryView } from "./CodeIntelPrimaryView";
 import { ConversationsPrimaryView } from "./ConversationsPrimaryView";
 import { DeckPrimaryView } from "./DeckPrimaryView";
@@ -98,6 +99,10 @@ export const PrimaryViewRouter = ({
 
   if (activePrimaryNav === 9) {
     return <ClaudeBrainDaemons />;
+  }
+
+  if (activePrimaryNav === 10) {
+    return <ClaudeBrainRollouts />;
   }
 
   return <CanvasPrimaryView {...canvasPrimaryViewProps} />;
