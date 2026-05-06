@@ -95,6 +95,42 @@ cd /root/briefingdeck && \
   nohup node /root/octogent/bin/octogent > /tmp/octogent.log 2>&1 &
 ```
 
+## Specialized Agent Layer
+
+Octogent's `terminal create` API can spawn role-specialized Claude Code instances under one tentacle. Each role boots with a system prompt template that restricts tools, suggests skills, and enforces an auto-research loop against the Lore MCP wiki.
+
+| Role | One-liner |
+|---|---|
+| `bd-research` | Investigates topics. Reads Lore first, then Perplexity / Exa / Context7. Read-only on source code. |
+| `bd-builder` | Ships code under TDD. Tests first, `.venv/bin/pytest` before done. |
+| `bd-reviewer` | Read-only structured review with severity-rated comments. |
+| `bd-synthesizer` | NotebookLM-style paragraphs with span-level verbatim citations. |
+| `bd-planner` | Plans with binary acceptance contracts. Read-only on source. |
+
+### Spawn helper
+
+```bash
+bash /root/octogent/bin/spawn-team.sh \
+  --topic "implement D9 4-format audio styles" \
+  --tentacle audio \
+  --roles "research,builder,reviewer"
+```
+
+Spawns a parent coordinator (upstream `swarm-parent` template) plus one child per role using the matching `bd-<role>` prompt template at `/root/octogent/prompts/`. Use `--dry-run` to preview the `terminal create` invocations.
+
+### Auto-research loop (Karpathy-style)
+
+Every role's prompt template enforces two contracts:
+
+- BEFORE the work: `lore_search "<topic>"`, read top hits, cite priors.
+- AFTER the work: `lore_chronicle` with title `<role> learned: <topic>` and a one-paragraph distilled lesson.
+
+Lore is wired through the host's `~/.mcp.json` and inherited by the spawned Claude Code processes — no octogent-side MCP wiring is required. If the `mcp__lore__*` tools are absent in a given terminal, the agent logs a single stderr note and continues without the loop. This is opt-in by the prompt template; no fallback shim is added.
+
+This mirrors Andrej Karpathy's continuous-learning thesis: durable agent improvement comes from *doing the work, reflecting on quality, and writing a one-paragraph distilled lesson back to a persistent knowledge base for future invocations*. Lore is that knowledge base; the chronicle calls are the reflection step.
+
+The companion skill is `~/.claude/skills/briefingdeck-spawn-team/SKILL.md`.
+
 ## Roadmap
 
 Possible next integrations, in rough order of value:
