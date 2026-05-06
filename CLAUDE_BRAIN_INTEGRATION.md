@@ -1,5 +1,7 @@
 # claude-brain integration
 
+**Repo: <https://github.com/Miles0sage/octogent-brain>**
+
 This is a **fork of [hesamsheikh/octogent](https://github.com/hesamsheikh/octogent)** wired into
 the [`claude-brain`](https://github.com/Miles0sage) self-improvement stack. The original
 octogent — built by Hesam Sheikhalishahi — is a multi-agent terminal/canvas console for
