@@ -4,6 +4,7 @@ export * from "./domain/terminal";
 export * from "./domain/deck";
 export * from "./domain/agencyChart";
 export * from "./domain/agentRuntime";
+export * from "./domain/driver";
 export * from "./domain/channel";
 export * from "./domain/completionSound";
 export * from "./domain/conversation";

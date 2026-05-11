@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "_doc": "Cross-CLI routing config — Generator-Evaluator loop spec. See packages/core/src/domain/driver.ts. Copy to ~/.octogent-better/routing.json + edit. Aider writes, Claude Code evaluates in plan-mode, Gemini CLI gives intel, Codex stays as alternate writer. NotebookLM-grounded 2026-05-11 — see Octogent Better notebook for rationale.",
+  "defaultProvider": "claude-code",
+  "drivers": [
+    {
+      "provider": "aider",
+      "transport": "stdio",
+      "capabilities": ["writer"],
+      "command": "aider",
+      "baseArgs": ["--no-pretty", "--yes"],
+      "requiredEnv": ["OPENAI_API_KEY"],
+      "maxCostUsd": 1.0
+    },
+    {
+      "provider": "claude-code",
+      "transport": "acp",
+      "capabilities": ["writer", "evaluator", "all"],
+      "command": "claude",
+      "baseArgs": [],
+      "requiredEnv": ["ANTHROPIC_API_KEY"],
+      "maxCostUsd": 2.0
+    },
+    {
+      "provider": "codex",
+      "transport": "pty",
+      "capabilities": ["writer", "evaluator"],
+      "command": "codex",
+      "baseArgs": [],
+      "requiredEnv": ["OPENAI_API_KEY"],
+      "maxCostUsd": 1.5
+    },
+    {
+      "provider": "gemini-cli",
+      "transport": "stdio",
+      "capabilities": ["intel"],
+      "command": "gemini",
+      "baseArgs": [],
+      "requiredEnv": ["GOOGLE_API_KEY"],
+      "maxCostUsd": 0.5
+    }
+  ],
+  "rules": [
+    {
+      "taskType": "refactor",
+      "preferred": "aider",
+      "fallback": ["claude-code"],
+      "extraArgs": ["--architect"]
+    },
+    {
+      "taskType": "verify",
+      "preferred": "claude-code",
+      "fallback": ["codex"],
+      "extraArgs": ["--permission-mode", "plan"]
+    },
+    {
+      "taskType": "research",
+      "preferred": "gemini-cli",
+      "fallback": ["claude-code"],
+      "extraArgs": []
+    },
+    {
+      "taskType": "default",
+      "preferred": "claude-code",
+      "fallback": ["codex", "aider"],
+      "extraArgs": []
+    }
+  ]
+}
