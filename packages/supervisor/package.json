@@ -1,0 +1,40 @@
+{
+  "name": "@octogent/supervisor",
+  "version": "0.1.0",
+  "description": "Mechanical-supervision substrate for autonomous coding agents. Cross-CLI dispatcher + verdict-gate that catches rubber-stamp passes and forces re-iteration. Aider writes, Claude evaluates, your gate keeps both honest.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Miles0sage/octogent-brain.git",
+    "directory": "packages/supervisor"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "supervisor",
+    "claude",
+    "aider",
+    "mechanical-supervision",
+    "verdict-gate",
+    "rubber-stamp",
+    "cross-cli",
+    "agent-orchestration",
+    "anthropic",
+    "octogent"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@octogent/core": "workspace:*"
+  }
+}

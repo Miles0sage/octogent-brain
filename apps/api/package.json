@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@octogent/core": "workspace:*",
+    "@octogent/supervisor": "workspace:*",
     "node-pty": "^1.1.0",
     "ws": "^8.19.0"
   },

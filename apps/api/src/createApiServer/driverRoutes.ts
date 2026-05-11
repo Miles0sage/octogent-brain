@@ -2,9 +2,11 @@ import {
   type RoutingConfig,
   type TerminalAgentProvider,
 } from "@octogent/core";
-
-import { checkProviderHealth, dispatchTask } from "../drivers/dispatcher";
-import { loadRoutingConfig } from "../drivers/routingLoader";
+import {
+  checkProviderHealth,
+  dispatchTask,
+  loadRoutingConfig,
+} from "@octogent/supervisor";
 import type { ApiRouteHandler } from "./routeHelpers";
 import {
   readJsonBodyOrWriteError,

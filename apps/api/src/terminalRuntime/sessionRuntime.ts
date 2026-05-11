@@ -31,7 +31,10 @@ import type {
   TerminalSessionEndDetails,
   TerminalSessionStartDetails,
 } from "./types";
-import { createVerdictWatcher } from "./verdictWatcher";
+// verdictWatcher symbols re-exported via @octogent/supervisor (see
+// packages/supervisor/src/watcher.ts). Imported here only for type
+// inference; the watcher is created in terminalRuntime.ts and attached
+// to session.verdictWatcher before this hook fires.
 
 type CreateSessionRuntimeOptions = {
   websocketServer: WebSocketServer;

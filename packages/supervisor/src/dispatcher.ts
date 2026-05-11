@@ -13,7 +13,7 @@ import type {
   DriverDispatchResult,
   DriverHealthStatus,
   DriverInvocation,
-} from "./dispatchTypes";
+} from "./dispatch-types";
 
 const SPAWN_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;

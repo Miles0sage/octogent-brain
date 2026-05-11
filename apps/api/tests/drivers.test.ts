@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkProviderHealth,
   dispatchTask,
-} from "../src/drivers/dispatcher";
-import { loadRoutingConfig } from "../src/drivers/routingLoader";
+  loadRoutingConfig,
+} from "@octogent/supervisor";
 import {
   handleDriversDispatchRoute,
   handleDriversListRoute,

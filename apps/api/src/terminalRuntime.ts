@@ -28,8 +28,8 @@ import {
   loadTerminalRegistry,
   pruneUiStateTerminalReferences,
 } from "./terminalRuntime/registry";
+import { createVerdictWatcher } from "@octogent/supervisor";
 import { createSessionRuntime } from "./terminalRuntime/sessionRuntime";
-import { createVerdictWatcher } from "./terminalRuntime/verdictWatcher";
 import { createDefaultGitClient } from "./terminalRuntime/systemClients";
 import type { DirectSessionListener } from "./terminalRuntime/types";
 import {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createVerdictWatcher } from "../src/terminalRuntime/verdictWatcher";
+import { createVerdictWatcher } from "../src/watcher";
 
 const CLEAN_PASS_TAIL =
   'preamble prose blah blah\n' +

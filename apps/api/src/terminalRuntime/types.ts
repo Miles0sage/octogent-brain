@@ -112,7 +112,7 @@ export type TerminalSession = {
   // final-line JSON verdict, and rubber-stamps are mechanically blocked
   // + a re-iteration prompt is injected back into stdin. See
   // verdictWatcher.ts for the state machine.
-  verdictWatcher?: import("./verdictWatcher").VerdictWatcher | undefined;
+  verdictWatcher?: import("@octogent/supervisor").VerdictWatcher | undefined;
   autoVerdictLoop?: boolean;
 };
 
