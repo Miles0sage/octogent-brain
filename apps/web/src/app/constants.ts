@@ -17,6 +17,7 @@ export const PRIMARY_NAV_ITEMS = [
   { index: 8, label: "Settings" },
   { index: 9, label: "Brain" },
   { index: 10, label: "Rollouts" },
+  { index: 11, label: "Teams" },
 ] as const;
 
 export const GITHUB_COMMIT_SERIES_LENGTH = 30;

@@ -4,6 +4,7 @@ import type { PrimaryNavIndex } from "../app/constants";
 import type { UseMonitorRuntimeResult } from "../app/hooks/useMonitorRuntime";
 import { ActivityPrimaryView } from "./ActivityPrimaryView";
 import { CanvasPrimaryView } from "./CanvasPrimaryView";
+import { ClaudeBrainAgentTeams } from "./ClaudeBrainAgentTeams";
 import { ClaudeBrainDaemons } from "./ClaudeBrainDaemons";
 import { ClaudeBrainRollouts } from "./ClaudeBrainRollouts";
 import { CodeIntelPrimaryView } from "./CodeIntelPrimaryView";
@@ -103,6 +104,10 @@ export const PrimaryViewRouter = ({
 
   if (activePrimaryNav === 10) {
     return <ClaudeBrainRollouts />;
+  }
+
+  if (activePrimaryNav === 11) {
+    return <ClaudeBrainAgentTeams />;
   }
 
   return <CanvasPrimaryView {...canvasPrimaryViewProps} />;

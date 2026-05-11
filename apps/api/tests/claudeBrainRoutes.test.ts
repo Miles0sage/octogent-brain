@@ -4,7 +4,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { handleClaudeBrainDpoRecentRoute } from "../src/createApiServer/claudeBrainRoutes";
+import {
+  handleClaudeBrainAgentTeamsRoute,
+  handleClaudeBrainDpoRecentRoute,
+} from "../src/createApiServer/claudeBrainRoutes";
 
 type ResponseLike = {
   status: number;
@@ -97,5 +100,171 @@ describe("claude-brain dpo-recent route", () => {
     expect(body.files[0]?.date).toBe("2026-05-06");
     expect(body.files[0]?.line_count).toBe(3);
     expect(body.total_pairs).toBe(3);
+  });
+});
+
+// --- Agent teams + tasks ------------------------------------------------
+//
+// Mirrors Anthropic's experimental agent-teams persistence shape:
+//   ~/.claude/teams/<team>/inboxes/<teammate>.json   (mailbox messages)
+//   ~/.claude/tasks/<session-id>/.highwatermark      (per-session task offset)
+//   ~/.claude/tasks/<session-id>/.lock               (task-claim lock file)
+
+type AgentTeamsBody = {
+  teams: Array<{
+    name: string;
+    total_messages: number;
+    total_unread: number;
+    last_activity_iso: string | null;
+    inboxes: Array<{
+      teammate: string;
+      message_count: number;
+      unread_count: number;
+      last_timestamp_iso: string | null;
+      path: string;
+    }>;
+  }>;
+  tasks: Array<{
+    session_id: string;
+    size_bytes: number;
+    modified_iso: string;
+    has_lock: boolean;
+    highwatermark: string | null;
+  }>;
+  source_paths: { teams_dir: string; tasks_dir: string };
+  checked_at: string;
+  note?: string;
+};
+
+describe("claude-brain agent-teams route", () => {
+  let prevUserRoot: string | undefined;
+  let userRoot: string;
+
+  beforeEach(() => {
+    prevUserRoot = process.env.CLAUDE_USER_ROOT;
+    userRoot = mkdtempSync(join(tmpdir(), "octogent-cb-teams-test-"));
+    process.env.CLAUDE_USER_ROOT = userRoot;
+  });
+
+  afterEach(() => {
+    if (prevUserRoot === undefined) {
+      delete process.env.CLAUDE_USER_ROOT;
+    } else {
+      process.env.CLAUDE_USER_ROOT = prevUserRoot;
+    }
+    rmSync(userRoot, { recursive: true, force: true });
+  });
+
+  it("returns notes when teams/ and tasks/ directories are missing", async () => {
+    const ctx = buildRequest("http://x.test/api/claude-brain/agent-teams");
+    const handled = await handleClaudeBrainAgentTeamsRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as AgentTeamsBody;
+    expect(body.teams).toEqual([]);
+    expect(body.tasks).toEqual([]);
+    expect(body.note).toBeDefined();
+    expect(body.note).toMatch(/teams directory not found/);
+    expect(body.note).toMatch(/tasks directory not found/);
+  });
+
+  it("aggregates inbox message + unread counts per team", async () => {
+    const inboxDir = join(userRoot, "teams", "default", "inboxes");
+    mkdirSync(inboxDir, { recursive: true });
+    writeFileSync(
+      join(inboxDir, "researcher.json"),
+      JSON.stringify([
+        {
+          from: "team-lead",
+          text: "Start the research",
+          summary: "kickoff",
+          timestamp: "2026-05-10T10:00:00.000Z",
+          read: false,
+        },
+        {
+          from: "researcher",
+          text: "Done",
+          timestamp: "2026-05-10T12:00:00.000Z",
+          read: true,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(inboxDir, "builder.json"),
+      JSON.stringify([
+        {
+          from: "team-lead",
+          text: "Build it",
+          timestamp: "2026-05-11T09:00:00.000Z",
+          read: false,
+        },
+      ]),
+    );
+
+    const ctx = buildRequest("http://x.test/api/claude-brain/agent-teams");
+    const handled = await handleClaudeBrainAgentTeamsRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as AgentTeamsBody;
+    expect(body.teams).toHaveLength(1);
+    const team = body.teams[0]!;
+    expect(team.name).toBe("default");
+    expect(team.total_messages).toBe(3);
+    expect(team.total_unread).toBe(2);
+    expect(team.last_activity_iso).toBe("2026-05-11T09:00:00.000Z");
+    expect(team.inboxes).toHaveLength(2);
+    const teammates = team.inboxes.map((inbox) => inbox.teammate).sort();
+    expect(teammates).toEqual(["builder", "researcher"]);
+  });
+
+  it("captures task highwatermark + lock state per session", async () => {
+    const sessionDir = join(userRoot, "tasks", "abc-123");
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, ".highwatermark"), "42\n");
+    writeFileSync(join(sessionDir, ".lock"), "");
+
+    const sessionDirNoLock = join(userRoot, "tasks", "def-456");
+    mkdirSync(sessionDirNoLock, { recursive: true });
+    writeFileSync(join(sessionDirNoLock, ".highwatermark"), "7\n");
+
+    const ctx = buildRequest("http://x.test/api/claude-brain/agent-teams");
+    const handled = await handleClaudeBrainAgentTeamsRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as AgentTeamsBody;
+    expect(body.tasks).toHaveLength(2);
+    const locked = body.tasks.find((task) => task.session_id === "abc-123");
+    const unlocked = body.tasks.find((task) => task.session_id === "def-456");
+    expect(locked?.has_lock).toBe(true);
+    expect(locked?.highwatermark).toBe("42");
+    expect(unlocked?.has_lock).toBe(false);
+    expect(unlocked?.highwatermark).toBe("7");
+  });
+
+  it("tolerates malformed inbox JSON without throwing", async () => {
+    const inboxDir = join(userRoot, "teams", "broken", "inboxes");
+    mkdirSync(inboxDir, { recursive: true });
+    writeFileSync(join(inboxDir, "bad.json"), "{ this is not valid json");
+    writeFileSync(
+      join(inboxDir, "missing-fields.json"),
+      JSON.stringify([{ from: "x" }]),
+    );
+
+    const ctx = buildRequest("http://x.test/api/claude-brain/agent-teams");
+    const handled = await handleClaudeBrainAgentTeamsRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as AgentTeamsBody;
+    expect(body.teams).toHaveLength(1);
+    const team = body.teams[0]!;
+    expect(team.total_messages).toBe(0);
+    expect(team.inboxes.every((inbox) => inbox.message_count === 0)).toBe(true);
+  });
+
+  it("returns 405 on non-GET method", async () => {
+    const ctx = buildRequest("http://x.test/api/claude-brain/agent-teams");
+    const postCtx = {
+      ...ctx,
+      request: { method: "POST" } as unknown as import("node:http").IncomingMessage,
+    };
+    const handled = await handleClaudeBrainAgentTeamsRoute(postCtx, {} as never);
+    expect(handled).toBe(true);
+    expect(postCtx.responseStub.status).toBe(405);
   });
 });

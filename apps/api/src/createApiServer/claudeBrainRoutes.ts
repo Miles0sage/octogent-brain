@@ -381,5 +381,224 @@ export const handleClaudeBrainMemoryRoute: ApiRouteHandler = async (
   return true;
 };
 
+// --- Agent teams ---------------------------------------------------------
+//
+// Anthropic's experimental "agent-teams" primitive (Claude Code v2.1.32+, gated
+// behind CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) persists state under
+// `~/.claude/teams/<team>/inboxes/<teammate>.json` (mailbox) and
+// `~/.claude/tasks/<session-id>/{.highwatermark,.lock}` (task-claim state).
+//
+// Sources:
+//   https://code.claude.com/docs/en/agent-teams  (fetched 2026-05-11)
+//   https://code.claude.com/docs/en/hooks         §TeammateIdle / TaskCreated / TaskCompleted
+//
+// This route surfaces both as a single read-only snapshot for the dashboard.
+
+type AgentTeamMessage = {
+  from: string;
+  text: string;
+  summary?: string;
+  timestamp: string;
+  read: boolean;
+};
+
+type AgentTeamInbox = {
+  teammate: string;
+  message_count: number;
+  unread_count: number;
+  last_timestamp_iso: string | null;
+  path: string;
+};
+
+type AgentTeamSummary = {
+  name: string;
+  inboxes: AgentTeamInbox[];
+  total_messages: number;
+  total_unread: number;
+  last_activity_iso: string | null;
+};
+
+type AgentTaskSnapshot = {
+  session_id: string;
+  size_bytes: number;
+  modified_iso: string;
+  has_lock: boolean;
+  highwatermark: string | null;
+};
+
+type AgentTeamsPayload = {
+  teams: AgentTeamSummary[];
+  tasks: AgentTaskSnapshot[];
+  source_paths: { teams_dir: string; tasks_dir: string };
+  checked_at: string;
+  note?: string;
+};
+
+const isAgentTeamMessage = (value: unknown): value is AgentTeamMessage => {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.from === "string" &&
+    typeof record.text === "string" &&
+    typeof record.timestamp === "string" &&
+    typeof record.read === "boolean"
+  );
+};
+
+const readInboxMessages = (path: string): AgentTeamMessage[] => {
+  try {
+    const raw = readFileSync(path, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isAgentTeamMessage);
+  } catch {
+    return [];
+  }
+};
+
+const summarizeInbox = (teamDir: string, inboxFile: string): AgentTeamInbox => {
+  const inboxPath = join(teamDir, "inboxes", inboxFile);
+  const messages = readInboxMessages(inboxPath);
+  const teammate = inboxFile.endsWith(".json") ? inboxFile.slice(0, -5) : inboxFile;
+  let lastTimestamp: string | null = null;
+  let unread = 0;
+  for (const message of messages) {
+    if (!message.read) unread += 1;
+    if (!lastTimestamp || message.timestamp > lastTimestamp) {
+      lastTimestamp = message.timestamp;
+    }
+  }
+  return {
+    teammate,
+    message_count: messages.length,
+    unread_count: unread,
+    last_timestamp_iso: lastTimestamp,
+    path: inboxPath,
+  };
+};
+
+const summarizeTeam = (teamsDir: string, teamName: string): AgentTeamSummary => {
+  const teamDir = join(teamsDir, teamName);
+  const inboxesDir = join(teamDir, "inboxes");
+  const inboxes: AgentTeamInbox[] = [];
+  if (existsSync(inboxesDir)) {
+    try {
+      for (const entry of readdirSync(inboxesDir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (!entry.name.endsWith(".json")) continue;
+        inboxes.push(summarizeInbox(teamDir, entry.name));
+      }
+    } catch {
+      // ignore — return partial.
+    }
+  }
+  let totalMessages = 0;
+  let totalUnread = 0;
+  let lastActivity: string | null = null;
+  for (const inbox of inboxes) {
+    totalMessages += inbox.message_count;
+    totalUnread += inbox.unread_count;
+    if (inbox.last_timestamp_iso && (!lastActivity || inbox.last_timestamp_iso > lastActivity)) {
+      lastActivity = inbox.last_timestamp_iso;
+    }
+  }
+  inboxes.sort((a, b) => a.teammate.localeCompare(b.teammate));
+  return {
+    name: teamName,
+    inboxes,
+    total_messages: totalMessages,
+    total_unread: totalUnread,
+    last_activity_iso: lastActivity,
+  };
+};
+
+const readHighwatermark = (path: string): string | null => {
+  try {
+    return readFileSync(path, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+};
+
+const collectAgentTasks = (tasksDir: string): AgentTaskSnapshot[] => {
+  const tasks: AgentTaskSnapshot[] = [];
+  if (!existsSync(tasksDir)) return tasks;
+  try {
+    for (const entry of readdirSync(tasksDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const sessionDir = join(tasksDir, entry.name);
+      try {
+        const stat = statSync(sessionDir);
+        const highwatermarkPath = join(sessionDir, ".highwatermark");
+        const lockPath = join(sessionDir, ".lock");
+        tasks.push({
+          session_id: entry.name,
+          size_bytes: stat.size,
+          modified_iso: new Date(stat.mtimeMs).toISOString(),
+          has_lock: existsSync(lockPath),
+          highwatermark: existsSync(highwatermarkPath)
+            ? readHighwatermark(highwatermarkPath)
+            : null,
+        });
+      } catch {
+        // skip
+      }
+    }
+  } catch {
+    // ignore — return partial.
+  }
+  tasks.sort((a, b) => (b.modified_iso > a.modified_iso ? 1 : -1));
+  return tasks;
+};
+
+export const handleClaudeBrainAgentTeamsRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+) => {
+  if (requestUrl.pathname !== "/api/claude-brain/agent-teams") {
+    return false;
+  }
+  if (request.method !== "GET") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const teamsDir = join(claudeUserRoot(), "teams");
+  const tasksDir = join(claudeUserRoot(), "tasks");
+  const teams: AgentTeamSummary[] = [];
+  const notes: string[] = [];
+
+  if (existsSync(teamsDir)) {
+    try {
+      for (const entry of readdirSync(teamsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        teams.push(summarizeTeam(teamsDir, entry.name));
+      }
+    } catch {
+      notes.push(`Failed to walk ${teamsDir}.`);
+    }
+  } else {
+    notes.push(`teams directory not found at ${teamsDir}`);
+  }
+  teams.sort((a, b) => a.name.localeCompare(b.name));
+
+  const tasks = collectAgentTasks(tasksDir);
+  if (!existsSync(tasksDir)) {
+    notes.push(`tasks directory not found at ${tasksDir}`);
+  }
+
+  const payload: AgentTeamsPayload = {
+    teams,
+    tasks,
+    source_paths: { teams_dir: teamsDir, tasks_dir: tasksDir },
+    checked_at: new Date().toISOString(),
+  };
+  if (notes.length > 0) {
+    payload.note = notes.join(" | ");
+  }
+
+  writeJson(response, 200, payload, corsOrigin);
+  return true;
+};
+
 // Suppress unused-import lints; basename is exported for tests of helpers if added later.
 void basename;
