@@ -75,13 +75,30 @@ const truncatedTail = (buffer: string): string =>
     ? buffer
     : buffer.slice(buffer.length - SCAN_WINDOW_BYTES);
 
+// The re-inject prompt is written back into the PTY's stdin. LLM-supplied
+// content (verdict.issues + gate.reason) may contain control characters,
+// bracketed-paste terminators, or shell metacharacters. If the PTY
+// receiver is a bare shell (rather than an agent CLI), unsanitized bytes
+// could trigger command execution. Strip every ESC sequence + control
+// byte; the receiver gets prose text only. Per L3 audit C3 (2026-05-12).
+const sanitizeForBracketedPaste = (value: string): string =>
+  value
+    // Strip any bracketed-paste markers the LLM may have echoed back.
+    .replace(/\x1b\[20[01]~/g, "")
+    // Strip all CSI escape sequences (ESC [ ... letter).
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    // Strip C0 controls (NUL through US, except LF and CR) + DEL.
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, " ");
+
 const buildReinjectPrompt = (verdict: ReviewerVerdict, gate: GateDecision): string => {
+  const safeReason = sanitizeForBracketedPaste(gate.reason);
+  const safeIssues = verdict.issues.map(sanitizeForBracketedPaste);
   const issuesBlock =
-    verdict.issues.length === 0
+    safeIssues.length === 0
       ? "(no specific issues reported)"
-      : verdict.issues.map((issue, idx) => `${idx + 1}. ${issue}`).join("\n");
+      : safeIssues.map((issue, idx) => `${idx + 1}. ${issue}`).join("\n");
   return [
-    `[verdict-gate blocked: ${gate.reason}]`,
+    `[verdict-gate blocked: ${safeReason}]`,
     "Your prior verdict was overridden — the gate-trust-numbers rule kicked in.",
     "Iterate on the underlying work to address these issues, then emit a stronger",
     "verdict JSON with truthful scores.",

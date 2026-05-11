@@ -29,10 +29,11 @@ export type LoopDecision = {
   action: "continue" | "approve" | "max" | "fp";
 };
 
-export const DEFAULT_REVIEW_FIX_LOOP_CONFIG: ReviewFixLoopConfig = {
+// Frozen — same rationale as DEFAULT_GATE_CONFIG.
+export const DEFAULT_REVIEW_FIX_LOOP_CONFIG: Readonly<ReviewFixLoopConfig> = Object.freeze({
   maxIterations: 5,
   falsePositiveTerminationThreshold: 0.5,
-};
+});
 
 // A false-positive is any iteration where the reviewer textually said "pass"
 // but the verdict gate rejected it. That's the rubber-stamp signal — the

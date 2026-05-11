@@ -26,10 +26,12 @@ export type GateDecision = {
   reason: string;
 };
 
-export const DEFAULT_GATE_CONFIG: GateConfig = {
+// Frozen so consumers cannot mutate the shared default object.
+// Per L3 audit MEDIUM finding (2026-05-12).
+export const DEFAULT_GATE_CONFIG: Readonly<GateConfig> = Object.freeze({
   groundednessThreshold: 0.85,
   specificityThreshold: 0.85,
-};
+});
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);

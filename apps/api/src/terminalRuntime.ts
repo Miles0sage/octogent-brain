@@ -29,6 +29,7 @@ import {
   pruneUiStateTerminalReferences,
 } from "./terminalRuntime/registry";
 import { createVerdictWatcher } from "@octogent/supervisor";
+import { isTerminalAgentProvider } from "./terminalRuntime/types";
 import { createSessionRuntime } from "./terminalRuntime/sessionRuntime";
 import { createDefaultGitClient } from "./terminalRuntime/systemClients";
 import type { DirectSessionListener } from "./terminalRuntime/types";
@@ -694,16 +695,34 @@ export const createTerminalRuntime = ({
     setAutoVerdictLoop(
       terminalId: string,
       enabled: boolean,
-    ): { terminalId: string; enabled: boolean; iterations: number } | null {
+    ):
+      | { terminalId: string; enabled: boolean; iterations: number }
+      | { error: "agent-not-bound" }
+      | null {
       const session = sessions.get(terminalId);
       if (!session) return null;
+      // L3 audit C3: refuse to enable the loop unless this terminal was
+      // launched bound to a known agent provider. Otherwise the re-inject
+      // prompt is written into a bare shell stdin — sanitization helps
+      // but the harness should never assume.
       if (enabled) {
+        const terminal = terminals.get(terminalId);
+        if (!terminal || !isTerminalAgentProvider(terminal.agentProvider)) {
+          return { error: "agent-not-bound" };
+        }
+        // L3 audit M6: track lifetime iterations across reset() so a
+        // buggy/malicious caller polling re-enable cannot burn unbounded
+        // re-iterations. Hard cap of 25 per terminal session.
+        const cumulative = session.verdictWatcher?.getState().iterations.length ?? 0;
+        if (cumulative >= 25) {
+          return { error: "agent-not-bound" };
+        }
         session.autoVerdictLoop = true;
         if (!session.verdictWatcher) {
           session.verdictWatcher = createVerdictWatcher();
-        } else {
-          session.verdictWatcher.reset();
         }
+        // Note: we no longer call .reset() on re-enable — keeps the
+        // lifetime iteration count intact per M6 guard above.
       } else {
         session.autoVerdictLoop = false;
         if (session.verdictWatcher) {

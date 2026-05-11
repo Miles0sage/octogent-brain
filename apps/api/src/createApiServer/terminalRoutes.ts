@@ -399,8 +399,14 @@ export const handleTerminalAutoVerdictRoute: ApiRouteHandler = async (
   }
   const enabled = (body as { enabled?: unknown }).enabled === true;
   const result = runtime.setAutoVerdictLoop(terminalId, enabled);
-  if (!result) {
+  if (result === null) {
     writeJson(response, 404, { error: "terminal session not running" }, corsOrigin);
+    return true;
+  }
+  if ("error" in result) {
+    // L3 audit C3 + M6: refuse to enable the loop on terminals not bound
+    // to an agent provider, or that have already burned their 25-iter cap.
+    writeJson(response, 409, { error: result.error }, corsOrigin);
     return true;
   }
   writeJson(response, 200, result, corsOrigin);

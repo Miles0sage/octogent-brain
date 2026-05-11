@@ -208,7 +208,21 @@ export const pickDriverForTask = (
 // Default routing config shipped with octogent. Aider writes; Claude Code
 // evaluates; Codex stays as today; Gemini-CLI is intel-only. This is the
 // "static routing.json for hackathon" cut from the NBLM cut-list.
-export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
+// Regex used to validate driver command names before any PATH lookup —
+// rejects shell metacharacters so a malicious routing.json on disk
+// cannot smuggle code execution into the health probe. Per L3 audit C1
+// (2026-05-12).
+export const SAFE_DRIVER_COMMAND_PATTERN = /^[A-Za-z0-9_./-]+$/;
+
+export const isSafeDriverCommand = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  SAFE_DRIVER_COMMAND_PATTERN.test(value);
+
+// Frozen so consumers cannot mutate the shared default routing chart.
+// Typed intermediate so Object.freeze preserves the literal-union types
+// (TerminalAgentProvider) rather than widening them to string.
+const _defaultRoutingConfig: RoutingConfig = {
   version: 1,
   drivers: [
     {
@@ -284,3 +298,6 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   ],
   defaultProvider: "claude-code",
 };
+
+export const DEFAULT_ROUTING_CONFIG: Readonly<RoutingConfig> =
+  Object.freeze(_defaultRoutingConfig);

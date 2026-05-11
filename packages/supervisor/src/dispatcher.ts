@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
+import { access, constants } from "node:fs/promises";
+import { join } from "node:path";
 
 import {
   type RoutingConfig,
   type TerminalAgentProvider,
+  isSafeDriverCommand,
   pickDriverForTask,
 } from "@octogent/core";
 
@@ -18,18 +20,43 @@ import type {
 const SPAWN_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 
-// Health check: does the binary exist on PATH + are required env vars set?
-// We deliberately keep this cheap (no `which` shell-out — use `command -v`
-// via spawn) so the dispatcher can pick a driver in a few ms.
+// Binary names must be safe to look up on PATH. The dispatcher refuses
+// any command containing shell metacharacters so a malicious routing.json
+// dropped on disk cannot inject code at health-probe time.
+// Allowed: alphanumeric, dash, underscore, dot, slash. Rejected: `;` `&`
+// `|` `$` `` ` `` `<` `>` `*` `?` `\` whitespace, etc.
+const SAFE_BINARY_PATTERN = /^[A-Za-z0-9_./-]+$/;
+
+// Health check: does the binary exist on PATH? We refuse shell metas
+// outright and walk PATH ourselves rather than shell out to `command -v`.
+// Replaced the prior shell-injection-prone `spawn("command", [...], {shell:
+// "/bin/bash"})` per L3 audit C1 (2026-05-12). Pure Node, no shell.
 const checkBinaryOnPath = async (binary: string): Promise<boolean> => {
-  return new Promise((resolve) => {
-    const child = spawn("command", ["-v", binary], {
-      shell: "/bin/bash",
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    child.on("close", (code) => resolve(code === 0));
-    child.on("error", () => resolve(false));
-  });
+  // Defense in depth: validate at use-time too even though routing
+  // config validators should already reject this shape.
+  if (!SAFE_BINARY_PATTERN.test(binary) || !isSafeDriverCommand(binary)) {
+    return false;
+  }
+  // Absolute path: probe directly.
+  if (binary.startsWith("/") || binary.includes("/")) {
+    try {
+      await access(binary, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const pathEnv = process.env.PATH ?? "";
+  for (const dir of pathEnv.split(":")) {
+    if (dir.length === 0) continue;
+    try {
+      await access(join(dir, binary), constants.X_OK);
+      return true;
+    } catch {
+      // continue searching PATH
+    }
+  }
+  return false;
 };
 
 export const checkProviderHealth = async (
@@ -213,5 +240,3 @@ export const dispatchTask = async (
   };
 };
 
-// Suppress unused-import lints kept for future async helpers.
-void promisify;
