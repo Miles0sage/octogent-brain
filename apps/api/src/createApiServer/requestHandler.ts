@@ -77,6 +77,7 @@ import {
 } from "./security";
 import {
   handleTerminalActionRoute,
+  handleTerminalAutoVerdictRoute,
   handleTerminalItemRoute,
   handleTerminalPruneRoute,
   handleTerminalSnapshotsRoute,
@@ -167,6 +168,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleTerminalsCollectionRoute,
       handleTerminalPruneRoute,
       handleTerminalActionRoute,
+      handleTerminalAutoVerdictRoute,
       handleTerminalItemRoute,
     ],
   ],

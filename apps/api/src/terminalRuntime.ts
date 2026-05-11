@@ -29,6 +29,7 @@ import {
   pruneUiStateTerminalReferences,
 } from "./terminalRuntime/registry";
 import { createSessionRuntime } from "./terminalRuntime/sessionRuntime";
+import { createVerdictWatcher } from "./terminalRuntime/verdictWatcher";
 import { createDefaultGitClient } from "./terminalRuntime/systemClients";
 import type { DirectSessionListener } from "./terminalRuntime/types";
 import {
@@ -688,6 +689,52 @@ export const createTerminalRuntime = ({
       }
 
       return toTerminalSnapshot(terminal);
+    },
+
+    setAutoVerdictLoop(
+      terminalId: string,
+      enabled: boolean,
+    ): { terminalId: string; enabled: boolean; iterations: number } | null {
+      const session = sessions.get(terminalId);
+      if (!session) return null;
+      if (enabled) {
+        session.autoVerdictLoop = true;
+        if (!session.verdictWatcher) {
+          session.verdictWatcher = createVerdictWatcher();
+        } else {
+          session.verdictWatcher.reset();
+        }
+      } else {
+        session.autoVerdictLoop = false;
+        if (session.verdictWatcher) {
+          session.verdictWatcher.reset();
+        }
+      }
+      const iterations = session.verdictWatcher?.getState().iterations.length ?? 0;
+      return { terminalId, enabled, iterations };
+    },
+
+    getAutoVerdictLoopState(
+      terminalId: string,
+    ):
+      | {
+          terminalId: string;
+          enabled: boolean;
+          iterations: number;
+          terminated: boolean;
+          latestDecision: string | null;
+        }
+      | null {
+      const session = sessions.get(terminalId);
+      if (!session) return null;
+      const state = session.verdictWatcher?.getState();
+      return {
+        terminalId,
+        enabled: session.autoVerdictLoop === true,
+        iterations: state?.iterations.length ?? 0,
+        terminated: state?.terminated ?? false,
+        latestDecision: state?.latestDecision?.action ?? null,
+      };
     },
 
     pruneTerminals(): string[] {

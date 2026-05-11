@@ -31,6 +31,7 @@ import type {
   TerminalSessionEndDetails,
   TerminalSessionStartDetails,
 } from "./types";
+import { createVerdictWatcher } from "./verdictWatcher";
 
 type CreateSessionRuntimeOptions = {
   websocketServer: WebSocketServer;
@@ -615,6 +616,44 @@ export const createSessionRuntime = ({
         data: chunk,
       });
       emitStateIfChanged(session, sessionId, nextState);
+
+      if (session.verdictWatcher && session.autoVerdictLoop === true) {
+        const obs = session.verdictWatcher.observeChunk(chunk);
+        if (obs.kind === "verdict-blocked") {
+          broadcastMessage(session, {
+            type: "verdict-block",
+            iteration: obs.iteration,
+            gate_reason: obs.gate.reason,
+            scores: obs.verdict.scores,
+          });
+          appendDebugLog(
+            session,
+            `verdict-block session=${sessionId} iter=${obs.iteration} reason=${obs.gate.reason}`,
+          );
+          session.pty.write(
+            `${BRACKETED_PASTE_START}${obs.reinjectPrompt}${BRACKETED_PASTE_END}\r`,
+          );
+        } else if (obs.kind === "verdict-approved") {
+          broadcastMessage(session, {
+            type: "verdict-approved",
+            scores: obs.verdict.scores,
+          });
+          appendDebugLog(
+            session,
+            `verdict-approved session=${sessionId} g=${obs.verdict.scores.groundedness} s=${obs.verdict.scores.specificity}`,
+          );
+        } else if (obs.kind === "loop-terminated") {
+          broadcastMessage(session, {
+            type: "verdict-loop-terminated",
+            reason: obs.reason,
+            iterations: obs.iterations.length,
+          });
+          appendDebugLog(
+            session,
+            `verdict-loop-terminated session=${sessionId} reason=${obs.reason} iters=${obs.iterations.length}`,
+          );
+        }
+      }
     });
 
     const exitDisposable = session.pty.onExit(({ exitCode, signal }) => {

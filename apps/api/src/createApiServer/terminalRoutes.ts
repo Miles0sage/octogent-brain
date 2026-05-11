@@ -358,3 +358,51 @@ export const handleTerminalPruneRoute: ApiRouteHandler = async (
   writeJson(response, 200, { prunedTerminalIds: runtime.pruneTerminals() }, corsOrigin);
   return true;
 };
+
+// Toggle the verdict-watcher auto-loop on a live terminal session.
+// GET returns current state; POST {enabled: boolean} toggles. Once
+// enabled the PTY stdout is scanned for final-line JSON verdicts; failed
+// ones force a re-iteration prompt to be injected on stdin, capped at
+// the loop config's maxIterations.
+const AUTO_VERDICT_PATH_PATTERN = /^\/api\/terminals\/([^/]+)\/auto-verdict$/;
+
+export const handleTerminalAutoVerdictRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime },
+) => {
+  const match = requestUrl.pathname.match(AUTO_VERDICT_PATH_PATTERN);
+  if (!match) return false;
+
+  const terminalId = decodeURIComponent(match[1] ?? "");
+
+  if (request.method === "GET") {
+    const state = runtime.getAutoVerdictLoopState(terminalId);
+    if (!state) {
+      writeJson(response, 404, { error: "terminal session not running" }, corsOrigin);
+      return true;
+    }
+    writeJson(response, 200, state, corsOrigin);
+    return true;
+  }
+
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const bodyResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+  if (!bodyResult.ok) return true;
+  const body = bodyResult.payload;
+  if (typeof body !== "object" || body === null) {
+    writeJson(response, 400, { error: "body must be a JSON object" }, corsOrigin);
+    return true;
+  }
+  const enabled = (body as { enabled?: unknown }).enabled === true;
+  const result = runtime.setAutoVerdictLoop(terminalId, enabled);
+  if (!result) {
+    writeJson(response, 404, { error: "terminal session not running" }, corsOrigin);
+    return true;
+  }
+  writeJson(response, 200, result, corsOrigin);
+  return true;
+};

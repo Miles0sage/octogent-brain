@@ -40,12 +40,36 @@ export type TerminalActivityMessage = {
   type: "activity";
 };
 
+// Verdict-watcher events — emitted when the auto-verdict-loop is enabled
+// on this session and the PTY stdout contains a parseable JSON verdict
+// from the agent. See verdictWatcher.ts for the state machine.
+export type TerminalVerdictBlockMessage = {
+  type: "verdict-block";
+  iteration: number;
+  gate_reason: string;
+  scores: { groundedness: number; specificity: number };
+};
+
+export type TerminalVerdictApprovedMessage = {
+  type: "verdict-approved";
+  scores: { groundedness: number; specificity: number };
+};
+
+export type TerminalVerdictLoopTerminatedMessage = {
+  type: "verdict-loop-terminated";
+  reason: "max" | "fp";
+  iterations: number;
+};
+
 export type TerminalServerMessage =
   | TerminalStateMessage
   | TerminalOutputMessage
   | TerminalHistoryMessage
   | TerminalRenameMessage
-  | TerminalActivityMessage;
+  | TerminalActivityMessage
+  | TerminalVerdictBlockMessage
+  | TerminalVerdictApprovedMessage
+  | TerminalVerdictLoopTerminatedMessage;
 
 export type DirectSessionListener = (message: TerminalServerMessage) => void;
 
@@ -83,6 +107,13 @@ export type TerminalSession = {
   isClosed?: boolean;
   hasSeenProcessing?: boolean;
   lastToolName?: string | undefined;
+  // Opt-in verdict-gate auto-loop. Set when the terminal is created with
+  // `autoVerdictLoop: true` — every PTY stdout chunk is scanned for the
+  // final-line JSON verdict, and rubber-stamps are mechanically blocked
+  // + a re-iteration prompt is injected back into stdin. See
+  // verdictWatcher.ts for the state machine.
+  verdictWatcher?: import("./verdictWatcher").VerdictWatcher | undefined;
+  autoVerdictLoop?: boolean;
 };
 
 export type TerminalNameOrigin = "generated" | "user" | "prompt";
