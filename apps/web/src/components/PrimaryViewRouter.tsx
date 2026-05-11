@@ -7,6 +7,8 @@ import { CanvasPrimaryView } from "./CanvasPrimaryView";
 import { ClaudeBrainAgentTeams } from "./ClaudeBrainAgentTeams";
 import { ClaudeBrainDaemons } from "./ClaudeBrainDaemons";
 import { ClaudeBrainRollouts } from "./ClaudeBrainRollouts";
+import { PlansPanel } from "./PlansPanel";
+import { RolloutsGantt } from "./RolloutsGantt";
 import { CodeIntelPrimaryView } from "./CodeIntelPrimaryView";
 import { ConversationsPrimaryView } from "./ConversationsPrimaryView";
 import { DeckPrimaryView } from "./DeckPrimaryView";
@@ -108,6 +110,14 @@ export const PrimaryViewRouter = ({
 
   if (activePrimaryNav === 11) {
     return <ClaudeBrainAgentTeams />;
+  }
+
+  if (activePrimaryNav === 12) {
+    return <RolloutsGantt />;
+  }
+
+  if (activePrimaryNav === 13) {
+    return <PlansPanel />;
   }
 
   return <CanvasPrimaryView {...canvasPrimaryViewProps} />;

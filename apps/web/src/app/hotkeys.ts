@@ -19,6 +19,12 @@ export const isEditableEventTarget = (target: EventTarget | null): boolean => {
 };
 
 export const parsePrimaryNavKey = (key: string): PrimaryNavIndex | null => {
+  // Hotkeys are single-keypress (e.g. Cmd+1). Multi-character `key` values
+  // (e.g. "Enter", "10") are not valid nav shortcuts even when the trailing
+  // digits parse into a real PrimaryNavIndex.
+  if (key.length !== 1) {
+    return null;
+  }
   const n = Number.parseInt(key, 10);
   if (Number.isNaN(n) || n < 1 || n > PRIMARY_NAV_MAX) {
     return null;

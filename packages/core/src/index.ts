@@ -14,3 +14,5 @@ export * from "./domain/uiState";
 export * from "./domain/usage";
 export * from "./ports/TerminalSnapshotReader";
 export * from "./util/typeCoercion";
+export * from "./orchestrator/verdict-gate";
+export * from "./loops/review-fix-loop";
