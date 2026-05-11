@@ -222,11 +222,17 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
     },
     {
       provider: "claude-code",
-      transport: "acp",
+      transport: "stdio",
       capabilities: ["writer", "evaluator", "all"],
       command: "claude",
-      baseArgs: [],
-      requiredEnv: ["ANTHROPIC_API_KEY"],
+      // `claude --print` is the native non-interactive mode (read CLI
+      // help: "Print response and exit, useful for pipes"). Combined
+      // with --permission-mode plan it acts as a clean-context
+      // read-only evaluator: no edits, no shared state with the writer.
+      baseArgs: ["--print", "--permission-mode", "plan"],
+      // Empty: Claude Code uses keychain / OAuth by default; an
+      // ANTHROPIC_API_KEY env var is required only with --bare.
+      requiredEnv: [],
       maxCostUsd: 2.0,
     },
     {
@@ -259,7 +265,9 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
       taskType: "verify",
       preferred: "claude-code",
       fallback: ["codex"],
-      extraArgs: ["--permission-mode", "plan"],
+      // --permission-mode plan lives in claude-code's baseArgs now so
+      // every claude-code dispatch is in evaluator/plan mode by default.
+      extraArgs: [],
     },
     {
       taskType: "research",

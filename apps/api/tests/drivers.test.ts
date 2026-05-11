@@ -171,13 +171,27 @@ describe("checkProviderHealth", () => {
     }
   });
 
-  it("reports transport-unsupported when probing acp transport", async () => {
-    // claude-code is acp-transport. checkProviderHealth only supports stdio
-    // today (D2 scope). D3 will add ACP probe; until then we surface this.
-    const result = await checkProviderHealth("claude-code", DEFAULT_ROUTING_CONFIG);
+  it("reports transport-unsupported when probing pty transport", async () => {
+    // codex still uses pty transport in DEFAULT_ROUTING_CONFIG; the
+    // dispatcher's checkProviderHealth only handles stdio today.
+    const result = await checkProviderHealth("codex", DEFAULT_ROUTING_CONFIG);
     expect(result.healthy).toBe(false);
     if (!result.healthy) {
       expect(result.reason).toBe("transport-unsupported");
+    }
+  });
+
+  it("probes claude-code as stdio (D3) — health depends on `claude` binary on PATH", async () => {
+    const result = await checkProviderHealth("claude-code", DEFAULT_ROUTING_CONFIG);
+    // claude-code is now stdio transport with `claude --print
+    // --permission-mode plan`. Required env is empty (OAuth/keychain).
+    // Health depends only on whether `claude` is on PATH for the test
+    // host, which we cannot assume — assert structurally instead.
+    if (result.healthy) {
+      expect(result.healthy).toBe(true);
+    } else {
+      // Only acceptable reason on a host without `claude` binary.
+      expect(result.reason).toBe("binary-missing");
     }
   });
 });
@@ -210,28 +224,23 @@ describe("dispatchTask", () => {
     expect(result.events).toEqual([]);
   });
 
-  it("respects dryRun for verify task on claude-code (transport unsupported in D2)", async () => {
-    const prevAnthro = process.env.ANTHROPIC_API_KEY;
-    process.env.ANTHROPIC_API_KEY = "fake-test-key";
-    try {
-      const result = await dispatchTask(DEFAULT_ROUTING_CONFIG, {
-        taskType: "verify",
-        taskInput: "check this diff",
-        cwd: "/tmp",
-        dryRun: true,
-      });
-      expect(result.invocation).not.toBeNull();
-      if (result.invocation) expect(result.invocation.provider).toBe("claude-code");
-      // claude-code transport is acp — D2 health check rejects it. The
-      // dispatcher returns the planned invocation but does not spawn.
-      expect(result.health.healthy).toBe(false);
-      expect(result.exit_code).toBeNull();
-    } finally {
-      if (prevAnthro === undefined) {
-        delete process.env.ANTHROPIC_API_KEY;
-      } else {
-        process.env.ANTHROPIC_API_KEY = prevAnthro;
-      }
+  it("builds verify-task invocation as `claude --print --permission-mode plan <input>` (D3)", async () => {
+    const result = await dispatchTask(DEFAULT_ROUTING_CONFIG, {
+      taskType: "verify",
+      taskInput: "check this diff for groundedness",
+      cwd: "/tmp",
+      dryRun: true,
+    });
+    expect(result.invocation).not.toBeNull();
+    if (result.invocation) {
+      expect(result.invocation.provider).toBe("claude-code");
+      expect(result.invocation.command).toBe("claude");
+      expect(result.invocation.args).toEqual([
+        "--print",
+        "--permission-mode",
+        "plan",
+        "check this diff for groundedness",
+      ]);
     }
   });
 });

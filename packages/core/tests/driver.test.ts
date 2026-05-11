@@ -27,10 +27,18 @@ describe("DEFAULT_ROUTING_CONFIG", () => {
     expect(rule?.extraArgs).toContain("--architect");
   });
 
-  it("routes verify tasks to claude-code with plan permission mode", () => {
+  it("routes verify tasks to claude-code (plan mode is in driver baseArgs)", () => {
     const rule = DEFAULT_ROUTING_CONFIG.rules.find((r) => r.taskType === "verify");
     expect(rule?.preferred).toBe("claude-code");
-    expect(rule?.extraArgs).toEqual(["--permission-mode", "plan"]);
+    // --permission-mode plan moved from per-rule extraArgs into the
+    // claude-code driver's baseArgs so every claude-code dispatch is
+    // in evaluator mode by default. See driver.ts DEFAULT_ROUTING_CONFIG.
+    expect(rule?.extraArgs).toEqual([]);
+    const claudeDriver = DEFAULT_ROUTING_CONFIG.drivers.find(
+      (d) => d.provider === "claude-code",
+    );
+    expect(claudeDriver?.transport).toBe("stdio");
+    expect(claudeDriver?.baseArgs).toEqual(["--print", "--permission-mode", "plan"]);
   });
 });
 

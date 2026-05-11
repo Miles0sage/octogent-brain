@@ -14,11 +14,11 @@
     },
     {
       "provider": "claude-code",
-      "transport": "acp",
+      "transport": "stdio",
       "capabilities": ["writer", "evaluator", "all"],
       "command": "claude",
-      "baseArgs": [],
-      "requiredEnv": ["ANTHROPIC_API_KEY"],
+      "baseArgs": ["--print", "--permission-mode", "plan"],
+      "requiredEnv": [],
       "maxCostUsd": 2.0
     },
     {
@@ -51,7 +51,7 @@
       "taskType": "verify",
       "preferred": "claude-code",
       "fallback": ["codex"],
-      "extraArgs": ["--permission-mode", "plan"]
+      "extraArgs": []
     },
     {
       "taskType": "research",
