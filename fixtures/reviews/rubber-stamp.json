@@ -1,0 +1,12 @@
+{
+  "name": "rubber-stamp",
+  "label": "Rubber-stamp catch — claims pass but groundedness < 0.85",
+  "description": "Reviewer claims verdict=\"pass\" while the deterministic groundedness score is 0.62 — well below the 0.85 threshold. The gate-trust-numbers rule (Anthropic 2026-03-24 harness post) catches the LLM lying about approval and forces re-iteration.",
+  "raw_reviewer_output": "## Review: PR #1417 — chunked retriever\n\n### Summary\nLooks mostly fine. I am confident the answer is grounded enough.\n\n### Comments\n\n| Severity | File:Line | Issue | Suggested fix |\n|---|---|---|---|\n| MAJOR | retriever.py:88 | Chunk 12 cited but not in the source set | Verify chunk_id lookup |\n\n### Verification run\n- Command: `pytest tests/test_retriever.py -q`\n- Exit: `0`\n- Tail: `4 passed, 1 skipped in 1.12s`\n\n### Lore chronicle\nwritten: no\n\n{\"verdict\": \"pass\", \"improvements_exhausted\": false, \"issues\": [\"MAJOR retriever.py:88 chunk 12 not in source set\"], \"scores\": {\"groundedness\": 0.62, \"specificity\": 0.88}}",
+  "prior_iterations": [],
+  "expected_outcome": {
+    "parsed_verdict": true,
+    "gate_passes": false,
+    "loop_action": "continue"
+  }
+}

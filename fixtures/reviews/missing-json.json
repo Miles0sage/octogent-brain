@@ -1,0 +1,15 @@
+{
+  "name": "missing-json",
+  "label": "Missing JSON tail — parser returns null, gate force-fails",
+  "description": "Reviewer wrote prose comments but forgot the final-line JSON verdict. parseReviewerVerdict walks the output looking for balanced-brace JSON objects, finds none, returns null. The loop treats the missing verdict as an implicit fail and forces re-iteration.",
+  "raw_reviewer_output": "## Review: PR #1408 — synth response shape\n\n### Summary\nNeeds another pass. Citations not aligned with the paragraph boundaries.\n\n### Comments\n\n| Severity | File:Line | Issue | Suggested fix |\n|---|---|---|---|\n| BLOCKER | synthesizer.py:204 | paragraph[2] cites chunk 5 but chunk 5 belongs to paragraph[3] | Re-index citations after split |\n| MINOR | schemas.py:18 | Citation.start_line typed Optional[int] but never None in practice | Tighten to int |\n\n### Verification run\n- Command: `pytest tests/test_synth_review.py -q`\n- Exit: `1`\n- Tail: `FAILED tests/test_synth_review.py::test_citation_alignment`\n\n### Lore chronicle\nwritten: no\n\n(forgot to close with verdict JSON)",
+  "prior_iterations": [
+    {"verdict_label": "iter-1", "gate_passed": false},
+    {"verdict_label": "iter-2", "gate_passed": false}
+  ],
+  "expected_outcome": {
+    "parsed_verdict": false,
+    "gate_passes": false,
+    "loop_action": "continue"
+  }
+}

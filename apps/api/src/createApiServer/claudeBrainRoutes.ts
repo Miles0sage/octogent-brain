@@ -600,5 +600,228 @@ export const handleClaudeBrainAgentTeamsRoute: ApiRouteHandler = async (
   return true;
 };
 
+// --- Review-gate playground ---------------------------------------------
+//
+// Exposes the @octogent/core verdict-gate + review-fix-loop logic over HTTP
+// so the dashboard's nav-14 "Verify Loop" panel can demonstrate the
+// reviewer rubber-stamp catch + loop-decision logic on real fixtures
+// without spawning a live `claude -p` subprocess (no API spend, repeatable).
+//
+// GET  /api/claude-brain/review-fixtures        — list shipped reviewer fixtures.
+// GET  /api/claude-brain/review-fixtures/:name  — full fixture detail.
+// POST /api/claude-brain/review-gate            — run a raw reviewer output
+//                                                  through parse + gate + loop.
+
+import {
+  DEFAULT_GATE_CONFIG,
+  DEFAULT_REVIEW_FIX_LOOP_CONFIG,
+  decideNext,
+  evaluateVerdict,
+  parseReviewerVerdict,
+  type LoopIteration,
+  type ReviewerVerdict,
+} from "@octogent/core";
+import { readJsonBodyOrWriteError } from "./routeHelpers";
+
+const fixturesRoot = (): string =>
+  process.env.OCTOGENT_FIXTURES_ROOT?.trim() || "/root/octogent/fixtures/reviews";
+
+type ReviewFixture = {
+  name: string;
+  label: string;
+  description: string;
+  raw_reviewer_output: string;
+  prior_iterations: Array<{ verdict_label: string; gate_passed: boolean }>;
+  expected_outcome: {
+    parsed_verdict: boolean;
+    gate_passes: boolean;
+    loop_action: string;
+  };
+};
+
+const isReviewFixture = (value: unknown): value is ReviewFixture => {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return (
+    typeof r.name === "string" &&
+    typeof r.label === "string" &&
+    typeof r.description === "string" &&
+    typeof r.raw_reviewer_output === "string" &&
+    Array.isArray(r.prior_iterations) &&
+    typeof r.expected_outcome === "object" &&
+    r.expected_outcome !== null
+  );
+};
+
+const loadFixtureFiles = (): ReviewFixture[] => {
+  const root = fixturesRoot();
+  if (!existsSync(root)) return [];
+  const out: ReviewFixture[] = [];
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(".json")) continue;
+      try {
+        const raw = readFileSync(join(root, entry.name), "utf8");
+        const parsed: unknown = JSON.parse(raw);
+        if (isReviewFixture(parsed)) {
+          out.push(parsed);
+        }
+      } catch {
+        // skip malformed fixture
+      }
+    }
+  } catch {
+    // root not readable
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+};
+
+export const handleClaudeBrainReviewFixturesListRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+) => {
+  if (requestUrl.pathname !== "/api/claude-brain/review-fixtures") {
+    return false;
+  }
+  if (request.method !== "GET") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  const fixtures = loadFixtureFiles();
+  const root = fixturesRoot();
+  const payload: {
+    fixtures: Array<{ name: string; label: string; description: string }>;
+    source_path: string;
+    note?: string;
+  } = {
+    fixtures: fixtures.map((f) => ({
+      name: f.name,
+      label: f.label,
+      description: f.description,
+    })),
+    source_path: root,
+  };
+  if (fixtures.length === 0) {
+    payload.note = `No fixtures found at ${root}`;
+  }
+  writeJson(response, 200, payload, corsOrigin);
+  return true;
+};
+
+export const handleClaudeBrainReviewFixtureItemRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+) => {
+  const match = requestUrl.pathname.match(
+    /^\/api\/claude-brain\/review-fixtures\/([A-Za-z0-9_-]+)$/,
+  );
+  if (!match) return false;
+  if (request.method !== "GET") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  const name = match[1] ?? "";
+  const fixtures = loadFixtureFiles();
+  const fixture = fixtures.find((f) => f.name === name);
+  if (!fixture) {
+    writeJson(
+      response,
+      404,
+      { error: "fixture not found", name },
+      corsOrigin,
+    );
+    return true;
+  }
+  writeJson(response, 200, fixture, corsOrigin);
+  return true;
+};
+
+type ReviewGateRequest = {
+  raw_reviewer_output?: unknown;
+  prior_iterations?: unknown;
+};
+
+type PriorIterationInput = {
+  verdict_label: string;
+  verdict: ReviewerVerdict;
+  gate_passed: boolean;
+};
+
+const isPriorIterationInput = (value: unknown): value is PriorIterationInput => {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  if (typeof r.verdict_label !== "string") return false;
+  if (typeof r.gate_passed !== "boolean") return false;
+  if (typeof r.verdict !== "object" || r.verdict === null) return false;
+  const v = r.verdict as Record<string, unknown>;
+  if (v.verdict !== "pass" && v.verdict !== "fail") return false;
+  return true;
+};
+
+export const handleClaudeBrainReviewGateRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+) => {
+  if (requestUrl.pathname !== "/api/claude-brain/review-gate") {
+    return false;
+  }
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  const bodyResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+  if (!bodyResult.ok) return true;
+  const body = bodyResult.payload as ReviewGateRequest | null;
+  const raw = body && typeof body.raw_reviewer_output === "string"
+    ? body.raw_reviewer_output
+    : "";
+  const priorInput = Array.isArray(body?.prior_iterations)
+    ? body.prior_iterations
+    : [];
+
+  const verdict = parseReviewerVerdict(raw);
+  const gate = verdict ? evaluateVerdict(verdict, DEFAULT_GATE_CONFIG) : null;
+
+  const priorIterations: LoopIteration[] = [];
+  for (let idx = 0; idx < priorInput.length; idx += 1) {
+    const entry = priorInput[idx];
+    if (isPriorIterationInput(entry)) {
+      priorIterations.push({
+        iter: idx + 1,
+        verdict: entry.verdict,
+        gatePassed: entry.gate_passed,
+      });
+    }
+  }
+
+  const currentGatePassed = gate?.passes ?? false;
+  const iterationsForLoop: LoopIteration[] = verdict
+    ? [
+        ...priorIterations,
+        {
+          iter: priorIterations.length + 1,
+          verdict,
+          gatePassed: currentGatePassed,
+        },
+      ]
+    : priorIterations;
+
+  const loopDecision = decideNext(iterationsForLoop, DEFAULT_REVIEW_FIX_LOOP_CONFIG);
+
+  writeJson(
+    response,
+    200,
+    {
+      parsed_verdict: verdict,
+      gate_decision: gate,
+      loop_decision: loopDecision,
+      iterations_considered: iterationsForLoop.length,
+      gate_config: DEFAULT_GATE_CONFIG,
+      loop_config: DEFAULT_REVIEW_FIX_LOOP_CONFIG,
+    },
+    corsOrigin,
+  );
+  return true;
+};
+
 // Suppress unused-import lints; basename is exported for tests of helpers if added later.
 void basename;

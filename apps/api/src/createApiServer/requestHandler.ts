@@ -15,6 +15,9 @@ import {
   handleClaudeBrainDaemonsRoute,
   handleClaudeBrainDpoRecentRoute,
   handleClaudeBrainMemoryRoute,
+  handleClaudeBrainReviewFixtureItemRoute,
+  handleClaudeBrainReviewFixturesListRoute,
+  handleClaudeBrainReviewGateRoute,
 } from "./claudeBrainRoutes";
 import {
   handleClaudeBrainRewardsRecentRoute,
@@ -175,6 +178,9 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleClaudeBrainRolloutItemRoute,
       handleClaudeBrainRewardsRecentRoute,
       handleClaudeBrainAgentTeamsRoute,
+      handleClaudeBrainReviewFixturesListRoute,
+      handleClaudeBrainReviewFixtureItemRoute,
+      handleClaudeBrainReviewGateRoute,
     ],
   ],
 ]);

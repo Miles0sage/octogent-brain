@@ -1,0 +1,12 @@
+{
+  "name": "clean-pass",
+  "label": "Clean pass — high groundedness + specificity",
+  "description": "Reviewer reports valid scores above thresholds. The verdict-gate accepts; review-fix-loop emits 'approve' on the first iteration.",
+  "raw_reviewer_output": "## Review: PR #1429 — counter-evidence prompt\n\n### Summary\nGround-truth chunks back every claim. No invalid citation IDs. Tests cover both the matching and non-matching branches.\n\n### Comments\n\n| Severity | File:Line | Issue | Suggested fix |\n|---|---|---|---|\n| NIT | counter_evidence.py:42 | Magic string \"contradicts\" used twice | Promote to a constant |\n\n### Verification run\n- Command: `pytest tests/test_counter_evidence.py -q`\n- Exit: `0`\n- Tail: `8 passed in 0.41s`\n\n### Lore chronicle\nwritten: yes, chronicle id 7f1a\n\n{\"verdict\": \"pass\", \"improvements_exhausted\": false, \"issues\": [\"NIT counter_evidence.py:42 magic string\"], \"scores\": {\"groundedness\": 0.94, \"specificity\": 0.89}}",
+  "prior_iterations": [],
+  "expected_outcome": {
+    "parsed_verdict": true,
+    "gate_passes": true,
+    "loop_action": "approve"
+  }
+}

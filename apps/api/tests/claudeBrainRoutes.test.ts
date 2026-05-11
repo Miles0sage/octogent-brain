@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   handleClaudeBrainAgentTeamsRoute,
   handleClaudeBrainDpoRecentRoute,
+  handleClaudeBrainReviewFixtureItemRoute,
+  handleClaudeBrainReviewFixturesListRoute,
+  handleClaudeBrainReviewGateRoute,
 } from "../src/createApiServer/claudeBrainRoutes";
 
 type ResponseLike = {
@@ -266,5 +269,164 @@ describe("claude-brain agent-teams route", () => {
     const handled = await handleClaudeBrainAgentTeamsRoute(postCtx, {} as never);
     expect(handled).toBe(true);
     expect(postCtx.responseStub.status).toBe(405);
+  });
+});
+
+// --- Review-gate playground ----------------------------------------------
+//
+// Fixtures live on disk so the dashboard can demo verdict-gate + decideNext
+// against pre-recorded reviewer outputs (rubber-stamp, missing-JSON, clean-pass)
+// without spawning a live `claude -p` subprocess.
+
+const writeFixture = (
+  dir: string,
+  name: string,
+  raw: string,
+): void => {
+  const fixture = {
+    name,
+    label: `${name} label`,
+    description: `${name} description`,
+    raw_reviewer_output: raw,
+    prior_iterations: [],
+    expected_outcome: {
+      parsed_verdict: true,
+      gate_passes: true,
+      loop_action: "approve",
+    },
+  };
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify(fixture));
+};
+
+describe("claude-brain review-fixtures + review-gate routes", () => {
+  let prevFixtures: string | undefined;
+  let fixturesDir: string;
+
+  beforeEach(() => {
+    prevFixtures = process.env.OCTOGENT_FIXTURES_ROOT;
+    fixturesDir = mkdtempSync(join(tmpdir(), "octogent-rg-test-"));
+    process.env.OCTOGENT_FIXTURES_ROOT = fixturesDir;
+  });
+
+  afterEach(() => {
+    if (prevFixtures === undefined) {
+      delete process.env.OCTOGENT_FIXTURES_ROOT;
+    } else {
+      process.env.OCTOGENT_FIXTURES_ROOT = prevFixtures;
+    }
+    rmSync(fixturesDir, { recursive: true, force: true });
+  });
+
+  it("lists all fixtures, sorted by name", async () => {
+    writeFixture(fixturesDir, "zeta", "{}");
+    writeFixture(fixturesDir, "alpha", "{}");
+    const ctx = buildRequest("http://x.test/api/claude-brain/review-fixtures");
+    const handled = await handleClaudeBrainReviewFixturesListRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      fixtures: Array<{ name: string }>;
+      source_path: string;
+    };
+    expect(body.fixtures.map((f) => f.name)).toEqual(["alpha", "zeta"]);
+    expect(body.source_path).toBe(fixturesDir);
+  });
+
+  it("returns 404 for unknown fixture", async () => {
+    const ctx = buildRequest(
+      "http://x.test/api/claude-brain/review-fixtures/nonexistent",
+    );
+    const handled = await handleClaudeBrainReviewFixtureItemRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(404);
+  });
+
+  it("returns fixture detail when found", async () => {
+    writeFixture(fixturesDir, "demo", '{"verdict":"pass"}');
+    const ctx = buildRequest("http://x.test/api/claude-brain/review-fixtures/demo");
+    const handled = await handleClaudeBrainReviewFixtureItemRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as { name: string };
+    expect(body.name).toBe("demo");
+  });
+
+  const buildPostRequest = (url: string, body: unknown): ReturnType<typeof buildRequest> => {
+    const ctx = buildRequest(url);
+    const bodyStr = JSON.stringify(body);
+    const chunks = [Buffer.from(bodyStr)];
+    const stream = (async function* () {
+      for (const chunk of chunks) yield chunk;
+    })();
+    const fakeRequest = Object.assign(stream, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+    return {
+      ...ctx,
+      request: fakeRequest as unknown as import("node:http").IncomingMessage,
+    };
+  };
+
+  it("parses + accepts a clean-pass verdict", async () => {
+    const raw =
+      'preamble\n{"verdict": "pass", "improvements_exhausted": false, "issues": [], "scores": {"groundedness": 0.94, "specificity": 0.91}}';
+    const ctx = buildPostRequest(
+      "http://x.test/api/claude-brain/review-gate",
+      { raw_reviewer_output: raw, prior_iterations: [] },
+    );
+    const handled = await handleClaudeBrainReviewGateRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      parsed_verdict: { verdict: string } | null;
+      gate_decision: { passes: boolean } | null;
+      loop_decision: { action: string };
+    };
+    expect(body.parsed_verdict?.verdict).toBe("pass");
+    expect(body.gate_decision?.passes).toBe(true);
+    expect(body.loop_decision.action).toBe("approve");
+  });
+
+  it("rejects rubber-stamp verdict where scores fall below threshold", async () => {
+    const raw =
+      '{"verdict": "pass", "improvements_exhausted": false, "issues": [], "scores": {"groundedness": 0.62, "specificity": 0.88}}';
+    const ctx = buildPostRequest(
+      "http://x.test/api/claude-brain/review-gate",
+      { raw_reviewer_output: raw, prior_iterations: [] },
+    );
+    const handled = await handleClaudeBrainReviewGateRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      parsed_verdict: { verdict: string } | null;
+      gate_decision: { passes: boolean } | null;
+      loop_decision: { action: string };
+    };
+    expect(body.parsed_verdict?.verdict).toBe("pass");
+    expect(body.gate_decision?.passes).toBe(false);
+    expect(body.loop_decision.action).toBe("continue");
+  });
+
+  it("returns null parsed_verdict when JSON is missing", async () => {
+    const raw = "prose only — reviewer forgot the JSON tail";
+    const ctx = buildPostRequest(
+      "http://x.test/api/claude-brain/review-gate",
+      { raw_reviewer_output: raw, prior_iterations: [] },
+    );
+    const handled = await handleClaudeBrainReviewGateRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      parsed_verdict: unknown;
+      gate_decision: unknown;
+      loop_decision: { action: string };
+    };
+    expect(body.parsed_verdict).toBeNull();
+    expect(body.gate_decision).toBeNull();
+    // No verdict parsed -> no iteration appended -> empty iterations -> "continue".
+    expect(body.loop_decision.action).toBe("continue");
+  });
+
+  it("returns 405 on GET to /review-gate", async () => {
+    const ctx = buildRequest("http://x.test/api/claude-brain/review-gate");
+    const handled = await handleClaudeBrainReviewGateRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(405);
   });
 });
