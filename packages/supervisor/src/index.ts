@@ -62,3 +62,11 @@ export type {
   DriverHealthStatus,
   DriverInvocation,
 } from "./dispatch-types";
+
+export {
+  DEFAULT_VOTE_CONFIG,
+  tallyVotes,
+  type VoteConfig,
+  type VoteOutcome,
+  type VoterVerdict,
+} from "./vote";

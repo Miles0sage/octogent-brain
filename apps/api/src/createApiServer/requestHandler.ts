@@ -23,6 +23,7 @@ import {
   handleDriversDispatchRoute,
   handleDriversListRoute,
 } from "./driverRoutes";
+import { handleVoteDispatchRoute } from "./voteRoutes";
 import {
   handleClaudeBrainRewardsRecentRoute,
   handleClaudeBrainRolloutItemRoute,
@@ -189,6 +190,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleClaudeBrainReviewGateRoute,
       handleDriversListRoute,
       handleDriversDispatchRoute,
+      handleVoteDispatchRoute,
     ],
   ],
 ]);
