@@ -21,6 +21,7 @@ export const PRIMARY_NAV_ITEMS = [
   { index: 12, label: "Gantt" },
   { index: 13, label: "Plans" },
   { index: 14, label: "Verify" },
+  { index: 15, label: "Drivers" },
 ] as const;
 
 export const GITHUB_COMMIT_SERIES_LENGTH = 30;

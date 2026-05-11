@@ -7,6 +7,7 @@ import { CanvasPrimaryView } from "./CanvasPrimaryView";
 import { ClaudeBrainAgentTeams } from "./ClaudeBrainAgentTeams";
 import { ClaudeBrainDaemons } from "./ClaudeBrainDaemons";
 import { ClaudeBrainRollouts } from "./ClaudeBrainRollouts";
+import { DriversPanel } from "./DriversPanel";
 import { PlansPanel } from "./PlansPanel";
 import { RolloutsGantt } from "./RolloutsGantt";
 import { VerifyLoopPanel } from "./VerifyLoopPanel";
@@ -123,6 +124,10 @@ export const PrimaryViewRouter = ({
 
   if (activePrimaryNav === 14) {
     return <VerifyLoopPanel />;
+  }
+
+  if (activePrimaryNav === 15) {
+    return <DriversPanel />;
   }
 
   return <CanvasPrimaryView {...canvasPrimaryViewProps} />;
