@@ -163,3 +163,171 @@
   font-size: 0.72rem;
   margin-top: 0.2rem;
 }
+
+/* Summary stats row — used by Daemons / Teams / Gantt / Plans. */
+.claude-brain-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.46rem;
+}
+
+.claude-brain-stat {
+  border: 1px solid #2b2f36;
+  background: #11161d;
+  padding: 0.38rem 0.62rem;
+  display: grid;
+  gap: 0.12rem;
+  min-width: 96px;
+}
+
+.claude-brain-stat-label {
+  color: #6f7d92;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.claude-brain-stat-value {
+  color: #dce6f7;
+  font-size: 1.05rem;
+  font-family: var(--font-main);
+}
+
+/* Tabular data — Teams task-state, possibly future panels. */
+.claude-brain-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  color: #b8c2d1;
+}
+
+.claude-brain-table th {
+  text-align: left;
+  font-weight: 500;
+  color: #9eb0c8;
+  padding: 0.32rem 0.5rem;
+  border-bottom: 1px solid #2b2f36;
+}
+
+.claude-brain-table td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #1a1f26;
+}
+
+.claude-brain-table tr:hover td {
+  background: #11161d;
+}
+
+/* Team / mailbox panel cards. */
+.claude-brain-team-card {
+  border: 1px solid #2b2f36;
+  background: #11161d;
+  padding: 0.5rem 0.62rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.claude-brain-team-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.claude-brain-team-header h3 {
+  margin: 0;
+  color: #dce6f7;
+  font-size: 0.88rem;
+}
+
+.claude-brain-team-meta {
+  color: #9eb0c8;
+  font-size: 0.76rem;
+}
+
+.claude-brain-inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.22rem;
+}
+
+.claude-brain-inbox-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.8fr);
+  gap: 0.6rem;
+  font-size: 0.78rem;
+  color: #b8c2d1;
+  padding: 0.18rem 0;
+  border-bottom: 1px dashed #1a1f26;
+}
+
+.claude-brain-inbox-teammate {
+  color: #dce6f7;
+  font-family: var(--font-main);
+}
+
+.claude-brain-inbox-counts {
+  color: #9eb0c8;
+}
+
+.claude-brain-inbox-last {
+  color: #6f7d92;
+  text-align: right;
+}
+
+/* Gantt chart wrapper — scrollable horizontally on small viewports. */
+.claude-brain-gantt-wrap {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #0b0d10;
+  border: 1px solid #2b2f36;
+  padding: 0.4rem;
+}
+
+/* Selected-rollout detail panel under the Gantt. */
+.claude-brain-detail {
+  border: 1px solid #2b2f36;
+  background: #11161d;
+  padding: 0.5rem 0.62rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.claude-brain-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.claude-brain-detail-header h3 {
+  margin: 0;
+  color: #dce6f7;
+  font-size: 0.88rem;
+  font-family: var(--font-main);
+}
+
+.claude-brain-detail-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.22rem 0.8rem;
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.claude-brain-detail-list dt {
+  color: #6f7d92;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+  align-self: center;
+}
+
+.claude-brain-detail-list dd {
+  margin: 0;
+  color: #b8c2d1;
+  word-break: break-word;
+}
