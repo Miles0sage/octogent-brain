@@ -84,3 +84,9 @@ export type {
 } from "./argue";
 
 export { dispatchAll } from "./dispatchers";
+
+export {
+  parseDispatchMode,
+  pickClisForMode,
+  type DispatchMode,
+} from "./dispatch-mode";

@@ -3,6 +3,7 @@ import { fetchPR as defaultFetchPR, type PRPayload } from "../../../packages/pr-
 import { createOracle, type Prior as OraclePrior } from "../../../packages/oracle/src/index.js";
 import { argue, type ArgueInput, type CliName, type RawVerdict } from "../../../packages/supervisor/src/argue.js";
 import { dispatchAll } from "../../../packages/supervisor/src/dispatchers/index.js";
+import { parseDispatchMode, pickClisForMode } from "../../../packages/supervisor/src/dispatch-mode.js";
 import { validateVerdict } from "../../../packages/core/src/verdict-gate.js";
 import type { Db } from "./db";
 
@@ -298,6 +299,9 @@ export async function runPipeline(
       id
     );
 
+    const dispatchMode = parseDispatchMode(process.env.ARGUED_DISPATCH_MODE);
+    const clis = pickClisForMode(dispatchMode, priors);
+
     const { verdicts } = await argue(
       {
         diff: payload.diff,
@@ -307,6 +311,7 @@ export async function runPipeline(
       },
       {
         dispatch,
+        clis,
         onVerdict: async (verdict) => {
           persistVerdict(db, id, buildStoredVerdict(verdict));
         },

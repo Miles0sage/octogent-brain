@@ -45,11 +45,13 @@ export interface RawVerdict {
 export interface ArgueOpts {
   dispatch: (cli: CliName, input: ArgueInput) => Promise<RawVerdict>;
   onVerdict?: (verdict: RawVerdict) => Promise<void> | void;
+  clis?: readonly CliName[];
 }
 
 export async function argue(input: ArgueInput, opts: ArgueOpts) {
+  const clis = opts.clis ?? CLIS;
   const verdicts = await Promise.all(
-    CLIS.map(async (cli) => {
+    clis.map(async (cli) => {
       let verdict: RawVerdict;
       try {
         verdict = await opts.dispatch(cli, input);
