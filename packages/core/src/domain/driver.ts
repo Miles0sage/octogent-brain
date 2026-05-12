@@ -38,9 +38,11 @@ export type DriverSpec = {
   // env vars that must be present at spawn time. Missing keys = driver
   // unhealthy. Empty array means no requirements.
   requiredEnv: ReadonlyArray<string>;
-  // Hard cost ceiling in USD per invocation. Dispatcher refuses to spawn
-  // if estimated cost exceeds this. -1 disables the gate.
-  maxCostUsd: number;
+  // NOTE (L3 audit M1, 2026-05-12): the prior `maxCostUsd: number` field
+  // was advisory-only — documented but never enforced by the dispatcher.
+  // Removed cleanly rather than half-implementing a cost gate. If a real
+  // cost gate is wanted, add it back behind an explicit dispatcher hook
+  // so the type contract matches runtime behaviour.
 };
 
 // One routing rule maps a task-type keyword to a preferred driver +
@@ -97,7 +99,7 @@ export const isDriverSpec = (
   if (typeof r.command !== "string" || r.command.length === 0) return false;
   if (!isStringArray(r.baseArgs)) return false;
   if (!isStringArray(r.requiredEnv)) return false;
-  if (typeof r.maxCostUsd !== "number" || !Number.isFinite(r.maxCostUsd)) return false;
+  // maxCostUsd intentionally not validated — see DriverSpec note (L3 M1).
   return true;
 };
 
@@ -232,7 +234,6 @@ const _defaultRoutingConfig: RoutingConfig = {
       command: "aider",
       baseArgs: ["--no-pretty", "--yes"],
       requiredEnv: ["OPENAI_API_KEY"],
-      maxCostUsd: 1.0,
     },
     {
       provider: "claude-code",
@@ -247,7 +248,6 @@ const _defaultRoutingConfig: RoutingConfig = {
       // Empty: Claude Code uses keychain / OAuth by default; an
       // ANTHROPIC_API_KEY env var is required only with --bare.
       requiredEnv: [],
-      maxCostUsd: 2.0,
     },
     {
       provider: "codex",
@@ -256,7 +256,6 @@ const _defaultRoutingConfig: RoutingConfig = {
       command: "codex",
       baseArgs: [],
       requiredEnv: ["OPENAI_API_KEY"],
-      maxCostUsd: 1.5,
     },
     {
       provider: "gemini-cli",
@@ -265,7 +264,6 @@ const _defaultRoutingConfig: RoutingConfig = {
       command: "gemini",
       baseArgs: [],
       requiredEnv: ["GOOGLE_API_KEY"],
-      maxCostUsd: 0.5,
     },
   ],
   rules: [

@@ -14,6 +14,11 @@ import {
   handleDriversDispatchRoute,
   handleDriversListRoute,
 } from "../src/createApiServer/driverRoutes";
+// L3 audit M3 (2026-05-12): voteRoutes also accepts a cwd field and must
+// enforce the same workspace allowlist. Tests live here because scope
+// restricts test edits to this file.
+import { handleVoteDispatchRoute } from "../src/createApiServer/voteRoutes";
+import { homedir } from "node:os";
 
 type ResponseLike = {
   status: number;
@@ -224,7 +229,7 @@ describe("dispatchTask", () => {
     expect(result.events).toEqual([]);
   });
 
-  it("builds verify-task invocation as `claude --print --permission-mode plan <input>` (D3)", async () => {
+  it("builds verify-task invocation as `claude --print --permission-mode plan -- <input>` (D3 + L3 M2 argv-injection guard)", async () => {
     const result = await dispatchTask(DEFAULT_ROUTING_CONFIG, {
       taskType: "verify",
       taskInput: "check this diff for groundedness",
@@ -235,12 +240,68 @@ describe("dispatchTask", () => {
     if (result.invocation) {
       expect(result.invocation.provider).toBe("claude-code");
       expect(result.invocation.command).toBe("claude");
+      // L3 audit M2 (2026-05-12): `--` end-of-options separator is
+      // inserted between extraArgs and taskInput so a hostile taskInput
+      // (e.g. starting with `--dangerously-skip-permissions`) cannot be
+      // parsed as a flag by the driver CLI.
       expect(result.invocation.args).toEqual([
         "--print",
         "--permission-mode",
         "plan",
+        "--",
         "check this diff for groundedness",
       ]);
+    }
+  });
+
+  // L3 audit M2 (2026-05-12): regression — taskInput that starts with
+  // `--` must land AFTER the end-of-options separator, never be parsed
+  // as a CLI flag.
+  it("places taskInput AFTER `--` end-of-options separator even when input begins with --flag", async () => {
+    const result = await dispatchTask(DEFAULT_ROUTING_CONFIG, {
+      taskType: "verify",
+      // Hostile-looking taskInput that would otherwise be a Claude CLI
+      // flag and could grant dangerous permissions.
+      taskInput: "--dangerously-skip-permissions",
+      cwd: "/tmp",
+      dryRun: true,
+    });
+    expect(result.invocation).not.toBeNull();
+    if (result.invocation) {
+      const args = result.invocation.args;
+      const dashIdx = args.indexOf("--");
+      expect(dashIdx).toBeGreaterThanOrEqual(0);
+      // taskInput must come strictly AFTER the `--` separator.
+      const tailIdx = args.indexOf("--dangerously-skip-permissions");
+      expect(tailIdx).toBeGreaterThan(dashIdx);
+      // And nothing BEFORE the `--` should be the hostile taskInput.
+      expect(args.slice(0, dashIdx)).not.toContain(
+        "--dangerously-skip-permissions",
+      );
+    }
+  });
+
+  // Companion: extraArgs (per-rule) still land BEFORE `--`, so legitimate
+  // flags like aider's `--architect` continue to function as flags.
+  it("keeps rule-level extraArgs (e.g. --architect) BEFORE the `--` separator", async () => {
+    const result = await dispatchTask(DEFAULT_ROUTING_CONFIG, {
+      taskType: "refactor",
+      taskInput: "rename foo to bar",
+      cwd: "/tmp",
+      dryRun: true,
+    });
+    expect(result.invocation).not.toBeNull();
+    if (result.invocation) {
+      const args = result.invocation.args;
+      // aider routing rule injects --architect as extraArgs.
+      const archIdx = args.indexOf("--architect");
+      const dashIdx = args.indexOf("--");
+      if (result.invocation.provider === "aider") {
+        // dryRun bypasses health gate in invocation builder shape;
+        // assert ordering only when invocation was built for aider.
+        expect(archIdx).toBeGreaterThanOrEqual(0);
+        expect(dashIdx).toBeGreaterThan(archIdx);
+      }
     }
   });
 });
@@ -296,10 +357,13 @@ describe("driverRoutes", () => {
   });
 
   it("POST /drivers/dispatch with dryRun returns invocation without spawning", async () => {
+    // Note: cwd updated from "/tmp" to process.cwd() per L3 audit M3
+    // (2026-05-12) — /tmp is no longer on the allowlist, so the prior
+    // value would now (correctly) get 400 cwd-not-allowed.
     const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
       taskType: "refactor",
       taskInput: "rename function foo to bar",
-      cwd: "/tmp",
+      cwd: process.cwd(),
       dryRun: true,
     });
     const handled = await handleDriversDispatchRoute(ctx, {} as never);
@@ -339,5 +403,173 @@ describe("driverRoutes", () => {
     const handled = await handleDriversListRoute(ctx, {} as never);
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(405);
+  });
+});
+
+// L3 audit M3 (2026-05-12): cwd allowlist.
+//
+// Background: the driverRoutes + voteRoutes handlers previously accepted
+// an arbitrary `cwd` string from request bodies and passed it straight to
+// the dispatcher, which spawned subprocesses there. A malicious client
+// could spawn an agent with cwd=/etc, /root/.ssh, or any other sensitive
+// directory it had read access to — letting the agent's file-reading
+// tools exfiltrate secrets via vote/dispatch output.
+//
+// Fix: the API layer canonicalizes the requested cwd via path.resolve
+// and refuses it unless it equals process.cwd() OR resolves under
+// ~/.octogent/tentacles/<id>/worktree/* (the only sanctioned tentacle
+// workspaces). Tests cover three classic attacker targets + happy paths.
+describe("driverRoutes M3: cwd allowlist", () => {
+  it("rejects cwd=/etc/passwd with 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "refactor",
+      taskInput: "harmless input",
+      cwd: "/etc/passwd",
+      dryRun: true,
+    });
+    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+    const body = JSON.parse(ctx.responseStub.body) as { error: string };
+    expect(body.error).toMatch(/cwd/i);
+  });
+
+  it("rejects cwd=/root/.ssh with 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "refactor",
+      taskInput: "harmless input",
+      cwd: "/root/.ssh",
+      dryRun: true,
+    });
+    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+  });
+
+  it("rejects cwd=/tmp (not whitelisted) with 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "refactor",
+      taskInput: "harmless input",
+      cwd: "/tmp",
+      dryRun: true,
+    });
+    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+  });
+
+  it("rejects path-traversal cwd that resolves outside allowlist", async () => {
+    const cwd = `${homedir()}/.octogent/tentacles/foo/worktree/../../../..`;
+    const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "refactor",
+      taskInput: "harmless input",
+      cwd,
+      dryRun: true,
+    });
+    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+  });
+
+  it("accepts cwd=process.cwd() (the workspace root)", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "refactor",
+      taskInput: "harmless input",
+      cwd: process.cwd(),
+      dryRun: true,
+    });
+    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+  });
+
+  it("accepts cwd within ~/.octogent/tentacles/<id>/worktree", async () => {
+    // Use a path under the allowlisted prefix; the dispatcher won't
+    // actually chdir into it because dryRun=true short-circuits before
+    // spawn — so the directory doesn't need to exist for the 400 vs 200
+    // distinction to hold.
+    const cwd = `${homedir()}/.octogent/tentacles/octopus-1/worktree`;
+    const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "refactor",
+      taskInput: "harmless input",
+      cwd,
+      dryRun: true,
+    });
+    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+  });
+
+  it("accepts cwd in subdirectory of a tentacle worktree", async () => {
+    const cwd = `${homedir()}/.octogent/tentacles/octopus-1/worktree/packages/core`;
+    const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "refactor",
+      taskInput: "harmless input",
+      cwd,
+      dryRun: true,
+    });
+    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+  });
+});
+
+describe("voteRoutes M3: cwd allowlist (same policy)", () => {
+  it("rejects cwd=/etc/passwd with 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify groundedness",
+      cwd: "/etc/passwd",
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+    const body = JSON.parse(ctx.responseStub.body) as { error: string };
+    expect(body.error).toMatch(/cwd/i);
+  });
+
+  it("rejects cwd=/root/.ssh with 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify groundedness",
+      cwd: "/root/.ssh",
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+  });
+
+  it("rejects cwd=/tmp (not whitelisted) with 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify groundedness",
+      cwd: "/tmp",
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+  });
+
+  it("accepts cwd=process.cwd()", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify groundedness",
+      cwd: process.cwd(),
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+  });
+
+  it("accepts cwd within ~/.octogent/tentacles/<id>/worktree", async () => {
+    const cwd = `${homedir()}/.octogent/tentacles/octopus-2/worktree`;
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify groundedness",
+      cwd,
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
   });
 });

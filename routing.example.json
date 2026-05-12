@@ -9,8 +9,7 @@
       "capabilities": ["writer"],
       "command": "aider",
       "baseArgs": ["--no-pretty", "--yes"],
-      "requiredEnv": ["OPENAI_API_KEY"],
-      "maxCostUsd": 1.0
+      "requiredEnv": ["OPENAI_API_KEY"]
     },
     {
       "provider": "claude-code",
@@ -18,8 +17,7 @@
       "capabilities": ["writer", "evaluator", "all"],
       "command": "claude",
       "baseArgs": ["--print", "--permission-mode", "plan"],
-      "requiredEnv": [],
-      "maxCostUsd": 2.0
+      "requiredEnv": []
     },
     {
       "provider": "codex",
@@ -27,8 +25,7 @@
       "capabilities": ["writer", "evaluator"],
       "command": "codex",
       "baseArgs": [],
-      "requiredEnv": ["OPENAI_API_KEY"],
-      "maxCostUsd": 1.5
+      "requiredEnv": ["OPENAI_API_KEY"]
     },
     {
       "provider": "gemini-cli",
@@ -36,8 +33,7 @@
       "capabilities": ["intel"],
       "command": "gemini",
       "baseArgs": [],
-      "requiredEnv": ["GOOGLE_API_KEY"],
-      "maxCostUsd": 0.5
+      "requiredEnv": ["GOOGLE_API_KEY"]
     }
   ],
   "rules": [

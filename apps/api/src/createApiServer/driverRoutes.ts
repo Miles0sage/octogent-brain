@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { resolve as resolvePath, sep } from "node:path";
+
 import {
   type RoutingConfig,
   type TerminalAgentProvider,
@@ -16,6 +19,46 @@ import {
 
 const isString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
+
+// L3 audit M3 (2026-05-12): cwd allowlist for driver/vote dispatch.
+//
+// Without this gate, a client could ask the API to spawn an agent
+// subprocess with cwd=/etc, /root/.ssh, or any directory the API user
+// can read. The agent then exfiltrates files via its read-tool output.
+//
+// Allowlist: process.cwd() (the API server's workspace root) plus any
+// path under ~/.octogent/tentacles/<id>/worktree (the sanctioned
+// per-tentacle workspaces). path.resolve canonicalizes "..", symlink-
+// free, before the prefix check — so `~/.octogent/tentacles/x/worktree/
+// ../../..` correctly resolves outside the allowlist and is rejected.
+//
+// Exported so voteRoutes.ts can apply the identical policy.
+export const TENTACLES_ROOT = resolvePath(homedir(), ".octogent", "tentacles");
+
+export const isCwdAllowed = (candidate: string): boolean => {
+  const resolved = resolvePath(candidate);
+  const workspace = resolvePath(process.cwd());
+  if (resolved === workspace) return true;
+  if (
+    resolved === workspace + sep ||
+    resolved.startsWith(workspace + sep)
+  ) {
+    return true;
+  }
+  // Must be under ~/.octogent/tentacles/<id>/worktree (or deeper).
+  // We accept any prefix of the form TENTACLES_ROOT/<id>/worktree.
+  const prefix = TENTACLES_ROOT + sep;
+  if (!resolved.startsWith(prefix) && resolved !== TENTACLES_ROOT) {
+    return false;
+  }
+  // resolved is /home/.../.octogent/tentacles/<rest>. Split off <id>
+  // and require the next segment to be "worktree".
+  const tail = resolved.slice(prefix.length); // <id>/worktree/...
+  const segments = tail.split(sep);
+  if (segments.length < 2) return false;
+  if (segments[1] !== "worktree") return false;
+  return true;
+};
 
 // GET /api/claude-brain/drivers — list configured drivers + their live
 // health probe results. Used by the upcoming "Drivers" dashboard panel.
@@ -44,7 +87,7 @@ export const handleDriversListRoute: ApiRouteHandler = async (
       capabilities: driver.capabilities,
       command: driver.command,
       requiredEnv: driver.requiredEnv,
-      maxCostUsd: driver.maxCostUsd,
+      // maxCostUsd removed per L3 audit M1 (2026-05-12).
       health: await checkProviderHealth(driver.provider, config),
     })),
   );
@@ -99,6 +142,17 @@ export const handleDriversDispatchRoute: ApiRouteHandler = async (
     typeof fields.cwd === "string" && fields.cwd.length > 0
       ? fields.cwd
       : process.cwd();
+  // L3 audit M3 (2026-05-12): refuse cwds outside the workspace + the
+  // sanctioned tentacle worktrees. See isCwdAllowed above.
+  if (!isCwdAllowed(cwd)) {
+    writeJson(
+      response,
+      400,
+      { error: "cwd not within allowed workspace" },
+      corsOrigin,
+    );
+    return true;
+  }
   const dryRun = fields.dryRun === true;
 
   const loaded = loadRoutingConfig();

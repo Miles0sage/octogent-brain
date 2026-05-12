@@ -29,6 +29,10 @@ import {
   type VoterVerdict,
 } from "@octogent/supervisor";
 
+// L3 audit M3 (2026-05-12): apply the identical cwd allowlist policy
+// driverRoutes uses. Both endpoints accept a cwd field and both spawn
+// subprocesses there, so they share the same threat model.
+import { isCwdAllowed } from "./driverRoutes";
 import type { ApiRouteHandler } from "./routeHelpers";
 import {
   readJsonBodyOrWriteError,
@@ -97,6 +101,17 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
 
   const taskType = isNonEmptyString(fields.taskType) ? fields.taskType : "verify";
   const cwd = isNonEmptyString(fields.cwd) ? fields.cwd : process.cwd();
+  // L3 audit M3 (2026-05-12): same allowlist driverRoutes uses. Refuse
+  // request-supplied cwds outside the workspace + tentacle worktrees.
+  if (!isCwdAllowed(cwd)) {
+    writeJson(
+      response,
+      400,
+      { error: "cwd not within allowed workspace" },
+      corsOrigin,
+    );
+    return true;
+  }
   const dryRun = fields.dryRun === true;
 
   const loaded = loadRoutingConfig();

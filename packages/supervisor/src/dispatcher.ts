@@ -96,10 +96,17 @@ const buildInvocation = (
   const rule = config.rules.find((r) => r.taskType === taskType);
   if (!driver) return null;
   const extraArgs = rule?.extraArgs ?? [];
+  // L3 audit M2 (2026-05-12): the `--` end-of-options marker prevents a
+  // hostile taskInput from being interpreted as a flag by the driver
+  // CLI. Without it, a taskInput starting with `--dangerously-skip-
+  // permissions` (or any other flag the driver respects) would be
+  // injected as argv directly. Every supported driver CLI (claude,
+  // aider, codex, gemini) honors `--` as the standard POSIX end-of-
+  // options marker, so this is safe to insert unconditionally.
   return {
     provider,
     command: driver.command,
-    args: [...driver.baseArgs, ...extraArgs, taskInput],
+    args: [...driver.baseArgs, ...extraArgs, "--", taskInput],
     cwd,
     envFlags: driver.requiredEnv,
   };

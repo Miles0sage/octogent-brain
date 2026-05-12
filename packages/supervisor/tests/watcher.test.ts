@@ -128,3 +128,117 @@ describe("verdictWatcher", () => {
     expect(watcher.getState().iterations).toHaveLength(0);
   });
 });
+
+// L3 audit M5 (2026-05-12): verdict-loss race.
+//
+// Before this fix, observeChunk's dedup used a single-slot lastSeenVerdict-
+// Key, AND parseReviewerVerdict returns only the last-in-document-order
+// candidate. So if a single chunk arrived with TWO distinct verdict JSON
+// objects back-to-back, the first one was silently swallowed: parseReviewer-
+// Verdict returned only the second, the watcher emitted one observation,
+// and the first verdict's information (issues, scores) was lost forever.
+// In production this could happen when the LLM streams a self-correcting
+// re-emission in the same chunk, or when a tool-use response and the final
+// verdict land together.
+//
+// Fix shape: observeChunk now queues subsequent verdicts found in the
+// same chunk; each call drains the queue first. Additionally, the watcher
+// exposes observeChunkAll(chunk) which returns ALL observations from a
+// chunk in document order — preferred by callers that want the full set
+// in one shot (and required by these tests).
+describe("verdictWatcher M5: multi-verdict-per-chunk", () => {
+  it("emits both observations when two verdicts arrive in one chunk", () => {
+    const watcher = createVerdictWatcher();
+    // Two verdicts back-to-back in one chunk. The first is a rubber
+    // stamp (blocked); the second is an honest fail with different
+    // scores so the dedup hash is different.
+    const chunk = `${RUBBER_STAMP_TAIL}\n${HONEST_FAIL_TAIL}`;
+    const observations = watcher.observeChunkAll(chunk);
+    // Either two verdict-blocked, or first verdict-blocked then loop-
+    // terminated if maxIterations is small. Either way both verdicts
+    // must be reflected in state.iterations.
+    expect(observations.length).toBeGreaterThanOrEqual(2);
+    const state = watcher.getState();
+    expect(state.iterations).toHaveLength(2);
+    // Verdict shapes both observed (groundedness differs).
+    const groundednesses = state.iterations.map(
+      (it) => it.verdict.scores.groundedness,
+    );
+    expect(groundednesses).toContain(0.62);
+    expect(groundednesses).toContain(0.4);
+  });
+
+  it("emits three observations when three verdicts span two chunks", () => {
+    const watcher = createVerdictWatcher({
+      gate: { groundednessThreshold: 0.85, specificityThreshold: 0.85 },
+      loop: { maxIterations: 5, falsePositiveTerminationThreshold: 0.5 },
+    });
+    // First chunk: two verdicts (rubber-stamp + honest fail variant 1).
+    const variantA = HONEST_FAIL_TAIL;
+    const chunk1 = `${RUBBER_STAMP_TAIL}\n${variantA}`;
+    const obs1 = watcher.observeChunkAll(chunk1);
+    expect(obs1.length).toBeGreaterThanOrEqual(2);
+    // Second chunk: a third distinct verdict.
+    const variantB =
+      '{"verdict": "fail", "improvements_exhausted": false, ' +
+      '"issues": ["different bug"], ' +
+      '"scores": {"groundedness": 0.3, "specificity": 0.55}}';
+    const obs2 = watcher.observeChunkAll(`\nmore prose\n${variantB}`);
+    expect(obs2.length).toBeGreaterThanOrEqual(1);
+    const state = watcher.getState();
+    expect(state.iterations).toHaveLength(3);
+  });
+
+  it("dedups identical verdicts emitted twice in the same chunk", () => {
+    const watcher = createVerdictWatcher();
+    // Same verdict shape twice in one chunk — must be observed once.
+    const chunk = `${RUBBER_STAMP_TAIL}\n${RUBBER_STAMP_TAIL}`;
+    const observations = watcher.observeChunkAll(chunk);
+    // At most one verdict-blocked (the dup is suppressed).
+    const verdictObservations = observations.filter(
+      (o) => o.kind === "verdict-blocked" || o.kind === "verdict-approved",
+    );
+    expect(verdictObservations).toHaveLength(1);
+    expect(watcher.getState().iterations).toHaveLength(1);
+  });
+
+  it("legacy observeChunk(): drains queued verdicts on subsequent calls", () => {
+    const watcher = createVerdictWatcher();
+    // First call delivers a chunk with two verdicts. The classic
+    // single-observation contract returns one observation per call,
+    // but the SECOND verdict must not be lost — it lands in the queue
+    // and the next observeChunk call returns it.
+    const chunk = `${RUBBER_STAMP_TAIL}\n${HONEST_FAIL_TAIL}`;
+    const first = watcher.observeChunk(chunk);
+    expect(first.kind).toMatch(/verdict-/);
+    // Subsequent call with empty chunk drains the pending queue.
+    const second = watcher.observeChunk("");
+    expect(second.kind).toMatch(/verdict-|loop-terminated/);
+    expect(watcher.getState().iterations).toHaveLength(2);
+  });
+
+  // L3 audit C3 companion: bracketed-paste / control-byte sanitization
+  // on verdict.issues + gate.reason. Tested at the reinjectPrompt level
+  // since that is the only data exfiltration path that touches the PTY.
+  it("sanitizes ESC sequences and bracketed-paste markers in issues", () => {
+    const watcher = createVerdictWatcher();
+    // verdict.issues contains both an ESC-CSI sequence and a bracketed-
+    // paste end marker. Both must be stripped before they reach the PTY.
+    const hostileVerdict =
+      '{"verdict": "pass", "improvements_exhausted": false, ' +
+      '"issues": ["\\u001b[201~malicious echo\\u001b[31mred ' +
+      'text", "\\u0007bell + \\u0000nul"], ' +
+      '"scores": {"groundedness": 0.62, "specificity": 0.88}}';
+    const obs = watcher.observeChunk(hostileVerdict);
+    expect(obs.kind).toBe("verdict-blocked");
+    if (obs.kind === "verdict-blocked") {
+      expect(obs.reinjectPrompt).not.toContain("\x1b[201~");
+      expect(obs.reinjectPrompt).not.toContain("\x1b[31m");
+      expect(obs.reinjectPrompt).not.toContain("\x00");
+      expect(obs.reinjectPrompt).not.toContain("\x07");
+      // The textual payload survives so re-iteration is meaningful.
+      expect(obs.reinjectPrompt).toContain("malicious echo");
+      expect(obs.reinjectPrompt).toContain("red text");
+    }
+  });
+});

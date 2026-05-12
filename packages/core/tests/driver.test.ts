@@ -189,7 +189,6 @@ describe("isDriverSpec type guard", () => {
       command: "",
       baseArgs: [],
       requiredEnv: [],
-      maxCostUsd: 1,
     };
     expect(isDriverSpec(bad, isTerminalAgentProvider)).toBe(false);
   });
@@ -202,8 +201,32 @@ describe("isDriverSpec type guard", () => {
       command: "aider",
       baseArgs: [],
       requiredEnv: [],
-      maxCostUsd: 1,
     };
     expect(isDriverSpec(bad, isTerminalAgentProvider)).toBe(false);
+  });
+
+  // L3 audit M1 (2026-05-12): maxCostUsd was advisory-only — documented
+  // but never enforced by the dispatcher. Removed cleanly from DriverSpec
+  // rather than half-implementing a cost gate. The type guard MUST NOT
+  // require the field anymore, and DEFAULT_ROUTING_CONFIG.drivers MUST
+  // not surface it.
+  it("does not require maxCostUsd field (removed in L3 audit M1)", () => {
+    const minimal = {
+      provider: "aider",
+      transport: "stdio",
+      capabilities: ["writer"],
+      command: "aider",
+      baseArgs: [],
+      requiredEnv: [],
+    };
+    expect(isDriverSpec(minimal, isTerminalAgentProvider)).toBe(true);
+  });
+
+  it("DEFAULT_ROUTING_CONFIG drivers do not surface maxCostUsd", () => {
+    for (const driver of DEFAULT_ROUTING_CONFIG.drivers) {
+      expect(
+        Object.prototype.hasOwnProperty.call(driver, "maxCostUsd"),
+      ).toBe(false);
+    }
   });
 });

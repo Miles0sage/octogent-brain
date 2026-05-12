@@ -9,6 +9,21 @@
 // node-pty dispatcher. When the orchestrator mechanically blocks a
 // hallucinated pass, the Gantt visually drops a BLOCK node, proving
 // the loop cannot be rubber-stamped."
+//
+// L3 audit M5 (2026-05-12): observeChunk previously used a single-slot
+// `lastSeenVerdictKey` dedup AND relied on parseReviewerVerdict — which
+// returns only the LAST candidate in document order. When two distinct
+// verdicts arrived in the same chunk (LLM self-correction, tool-use
+// trailer + verdict, etc.), the first was silently dropped. Fix:
+//   1. Walk the new-since-last-call slice of the buffer ourselves so we
+//      can see every balanced top-level JSON object, in document order.
+//   2. Replace single-slot dedup with `seenVerdictKeys: Set<string>`
+//      bounded to loop.maxIterations entries (FIFO when full).
+//   3. observeChunk keeps the legacy single-observation contract; extra
+//      observations land in a queue, drained on subsequent calls.
+//   4. observeChunkAll(chunk) — new — returns every observation from a
+//      chunk in document order. Preferred for new callers; the PTY
+//      runtime listener can migrate at its leisure.
 
 import {
   DEFAULT_GATE_CONFIG,
@@ -65,7 +80,18 @@ export type WatcherObservation =
     };
 
 export type VerdictWatcher = {
+  // Legacy contract: returns one observation per call. When a chunk
+  // contains multiple new verdicts, the first is returned and the rest
+  // are queued; subsequent observeChunk calls (even with `""`) drain
+  // the queue before scanning new bytes. Preserved so the live PTY
+  // listener in apps/api/src/terminalRuntime/sessionRuntime.ts keeps
+  // working without modification.
   observeChunk(chunk: string): WatcherObservation;
+  // Preferred new contract: returns every observation produced by a
+  // chunk, in document order. Empty array means "nothing happened"
+  // (formerly the `no-verdict` single-observation). Drains any queued
+  // observations from previous calls before processing the new chunk.
+  observeChunkAll(chunk: string): WatcherObservation[];
   getState(): VerdictWatcherState;
   reset(): void;
 };
@@ -110,6 +136,60 @@ const buildReinjectPrompt = (verdict: ReviewerVerdict, gate: GateDecision): stri
   ].join("\n");
 };
 
+// Walk a buffer and return every balanced top-level JSON object that
+// successfully parses as a ReviewerVerdict, in document order. Mirrors
+// the extraction logic in packages/core/src/orchestrator/verdict-gate.ts
+// but returns ALL candidates rather than just the last — required for
+// L3 M5 multi-verdict-per-chunk handling. Kept private to watcher.ts so
+// the core export stays focused on the "final line wins" contract.
+const extractAllVerdicts = (buffer: string): ReviewerVerdict[] => {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < buffer.length; i++) {
+    const ch = buffer[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        candidates.push(buffer.slice(start, i + 1));
+        start = -1;
+      } else if (depth < 0) {
+        depth = 0;
+        start = -1;
+      }
+    }
+  }
+  const out: ReviewerVerdict[] = [];
+  for (const c of candidates) {
+    // Round-trip through parseReviewerVerdict so the narrowing logic is
+    // shared (verdict literal, scores in [0,1], etc.). We call the
+    // single-candidate parser on the isolated JSON string so it picks
+    // up exactly that candidate without confusion.
+    const parsed = parseReviewerVerdict(c);
+    if (parsed !== null) out.push(parsed);
+  }
+  return out;
+};
+
 export const createVerdictWatcher = (
   config: VerdictWatcherConfig = {
     gate: DEFAULT_GATE_CONFIG,
@@ -117,7 +197,15 @@ export const createVerdictWatcher = (
   },
 ): VerdictWatcher => {
   let buffer = "";
-  let lastSeenVerdictKey = "";
+  // L3 M5: replaced the single-slot lastSeenVerdictKey with a Set so
+  // multiple distinct verdicts in the same chunk each emit exactly once.
+  // Bounded to maxIterations entries — older keys age out in insertion
+  // order so the set cannot grow unboundedly over long sessions.
+  const seenVerdictKeys = new Set<string>();
+  // Pending observations queued for subsequent observeChunk calls so the
+  // legacy single-observation contract is preserved while no verdict is
+  // ever lost.
+  const pendingObservations: WatcherObservation[] = [];
   const iterations: LoopIteration[] = [];
   let terminated = false;
   let latestDecision: LoopDecision | null = null;
@@ -126,28 +214,23 @@ export const createVerdictWatcher = (
 
   const maxIters = config.maxAutoIterations ?? config.loop.maxIterations;
 
-  const observeChunk = (chunk: string): WatcherObservation => {
-    if (terminated) {
-      return { kind: "no-verdict" };
+  // Record a verdict key in the seen set with FIFO eviction so the set
+  // stays bounded. maxIters is the natural cap because we can never act
+  // on more verdicts than that anyway.
+  const recordSeen = (key: string): void => {
+    seenVerdictKeys.add(key);
+    if (seenVerdictKeys.size > maxIters) {
+      // Set preserves insertion order; drop the oldest.
+      const oldest = seenVerdictKeys.values().next().value;
+      if (oldest !== undefined) seenVerdictKeys.delete(oldest);
     }
+  };
 
-    buffer = truncatedTail(buffer + chunk);
-
-    const verdict = parseReviewerVerdict(buffer);
-    if (verdict === null) {
-      return { kind: "no-verdict" };
-    }
-
-    // Dedupe identical verdicts within the same scan window — the parser
-    // walks the tail every chunk, so a stable verdict at the tip will
-    // re-parse identical until new bytes shift it. Hashing the verdict
-    // shape lets us emit it exactly once per actual emission.
-    const verdictKey = JSON.stringify(verdict);
-    if (verdictKey === lastSeenVerdictKey) {
-      return { kind: "no-verdict" };
-    }
-    lastSeenVerdictKey = verdictKey;
-
+  // Process one verdict candidate into its WatcherObservation +
+  // possibly terminate the loop. Mirrors the original single-pass
+  // logic, but factored out so observeChunkAll can loop over multiple
+  // verdicts from one chunk.
+  const processVerdict = (verdict: ReviewerVerdict): WatcherObservation => {
     const gate = evaluateVerdict(verdict, config.gate);
     latestVerdict = verdict;
     latestGate = gate;
@@ -196,6 +279,59 @@ export const createVerdictWatcher = (
     };
   };
 
+  // Append the new chunk to the buffer, then return every NEW verdict
+  // observation produced. "New" = the verdict's stringified key is not
+  // already in seenVerdictKeys. Document order preserved.
+  const collectFromChunk = (chunk: string): WatcherObservation[] => {
+    if (terminated) return [];
+    buffer = truncatedTail(buffer + chunk);
+    const verdicts = extractAllVerdicts(buffer);
+    const out: WatcherObservation[] = [];
+    for (const verdict of verdicts) {
+      if (terminated) break;
+      const key = JSON.stringify(verdict);
+      if (seenVerdictKeys.has(key)) continue;
+      recordSeen(key);
+      out.push(processVerdict(verdict));
+    }
+    return out;
+  };
+
+  const observeChunkAll = (chunk: string): WatcherObservation[] => {
+    // Drain any queue from prior calls first so document order across
+    // calls is preserved.
+    const drained = pendingObservations.splice(0, pendingObservations.length);
+    const fresh = collectFromChunk(chunk);
+    return [...drained, ...fresh];
+  };
+
+  const observeChunk = (chunk: string): WatcherObservation => {
+    // Legacy single-observation contract: drain queue first, else
+    // process the chunk and return the first observation while queueing
+    // the rest.
+    if (pendingObservations.length > 0) {
+      const next = pendingObservations.shift();
+      // Type narrows away undefined: pendingObservations.length > 0
+      // guarantees shift returns a defined entry.
+      if (next !== undefined) {
+        // Still scan the chunk so we don't miss subsequent verdicts
+        // that arrived while a queue entry was pending. Append the
+        // results to the queue.
+        const fresh = collectFromChunk(chunk);
+        if (fresh.length > 0) pendingObservations.push(...fresh);
+        return next;
+      }
+    }
+    const observations = collectFromChunk(chunk);
+    if (observations.length === 0) {
+      return { kind: "no-verdict" };
+    }
+    const [first, ...rest] = observations;
+    if (rest.length > 0) pendingObservations.push(...rest);
+    // The destructured first is non-undefined when observations.length > 0.
+    return first ?? { kind: "no-verdict" };
+  };
+
   const getState = (): VerdictWatcherState => ({
     iterations,
     latestDecision,
@@ -206,7 +342,8 @@ export const createVerdictWatcher = (
 
   const reset = (): void => {
     buffer = "";
-    lastSeenVerdictKey = "";
+    seenVerdictKeys.clear();
+    pendingObservations.length = 0;
     iterations.length = 0;
     terminated = false;
     latestDecision = null;
@@ -214,5 +351,5 @@ export const createVerdictWatcher = (
     latestVerdict = null;
   };
 
-  return { observeChunk, getState, reset };
+  return { observeChunk, observeChunkAll, getState, reset };
 };
