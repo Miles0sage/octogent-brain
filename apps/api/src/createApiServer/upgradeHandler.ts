@@ -1,7 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 
-import { isAllowedHostHeader, isAllowedOriginHeader, readHeaderValue } from "./security";
+import {
+  checkAuthorizedRequest,
+  isAllowedHostHeader,
+  isAllowedOriginHeader,
+  readHeaderValue,
+} from "./security";
 
 type TerminalRuntime = ReturnType<typeof import("../terminalRuntime").createTerminalRuntime>;
 
@@ -23,6 +28,12 @@ export const createUpgradeHandler = ({
     }
 
     if (!isAllowedOriginHeader(originHeader, allowRemoteAccess)) {
+      socket.destroy();
+      return;
+    }
+
+    const auth = checkAuthorizedRequest(request, { allowQueryToken: true });
+    if (!auth.ok) {
       socket.destroy();
       return;
     }

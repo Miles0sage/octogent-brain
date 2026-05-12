@@ -1,3 +1,5 @@
+import { appendRuntimeAuthToken } from "./runtimeAuth";
+
 type LocationLike = Pick<Location, "host" | "protocol">;
 
 const readRuntimeBaseUrl = (): string | null => {
@@ -57,15 +59,15 @@ export const buildTerminalEventsSocketUrl = (
   location: LocationLike = window.location,
 ) => {
   if (!runtimeBaseUrl) {
-    return localRuntimeWebSocketUrl(location, "/api/terminal-events/ws");
+    return appendRuntimeAuthToken(localRuntimeWebSocketUrl(location, "/api/terminal-events/ws"));
   }
 
   const websocketBase = toWebSocketBase(runtimeBaseUrl);
   if (!websocketBase) {
-    return localRuntimeWebSocketUrl(location, "/api/terminal-events/ws");
+    return appendRuntimeAuthToken(localRuntimeWebSocketUrl(location, "/api/terminal-events/ws"));
   }
 
-  return buildAbsoluteUrl(websocketBase, "/api/terminal-events/ws");
+  return appendRuntimeAuthToken(buildAbsoluteUrl(websocketBase, "/api/terminal-events/ws"));
 };
 
 export const buildTerminalsUrl = (runtimeBaseUrl = readRuntimeBaseUrl()) => {
@@ -400,13 +402,15 @@ export const buildTerminalSocketUrl = (
 ) => {
   const encodedTentacleId = encodeURIComponent(tentacleId);
   if (!runtimeBaseUrl) {
-    return localWebSocketUrl(location, encodedTentacleId);
+    return appendRuntimeAuthToken(localWebSocketUrl(location, encodedTentacleId));
   }
 
   const webSocketBase = toWebSocketBase(runtimeBaseUrl);
   if (!webSocketBase) {
-    return localWebSocketUrl(location, encodedTentacleId);
+    return appendRuntimeAuthToken(localWebSocketUrl(location, encodedTentacleId));
   }
 
-  return buildAbsoluteUrl(webSocketBase, `/api/terminals/${encodedTentacleId}/ws`);
+  return appendRuntimeAuthToken(
+    buildAbsoluteUrl(webSocketBase, `/api/terminals/${encodedTentacleId}/ws`),
+  );
 };

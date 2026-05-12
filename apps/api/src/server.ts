@@ -44,6 +44,12 @@ const validateStartupEnv = () => {
       `OCTOGENT_WEB_DIST_DIR directory does not exist: ${process.env.OCTOGENT_WEB_DIST_DIR} — web UI will be unavailable.`,
     );
   }
+
+  if (allowRemoteAccess && !(process.env.OCTOGENT_API_KEY?.trim().length ?? 0)) {
+    console.warn(
+      "OCTOGENT_ALLOW_REMOTE_ACCESS=1 is enabled without OCTOGENT_API_KEY. The dashboard will be reachable without authentication. Prefer setting OCTOGENT_API_KEY and opening the UI with ?octogent_token=<key>.",
+    );
+  }
 };
 
 validateStartupEnv();

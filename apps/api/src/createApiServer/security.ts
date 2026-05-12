@@ -31,6 +31,15 @@ const readApiKey = (): string | null => {
   return key && key.length > 0 ? key : null;
 };
 
+const normalizePresentedToken = (value: string | null | undefined): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
 const extractBearerHeader = (request: IncomingMessage): string | null => {
   const authHeader = request.headers.authorization;
   if (typeof authHeader === "string") {
@@ -44,6 +53,15 @@ const extractBearerHeader = (request: IncomingMessage): string | null => {
     return xToken.trim();
   }
   return null;
+};
+
+const extractQueryToken = (request: IncomingMessage): string | null => {
+  try {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    return normalizePresentedToken(url.searchParams.get("octogent_token"));
+  } catch {
+    return null;
+  }
 };
 
 const constantTimeEquals = (a: string, b: string): boolean => {
@@ -68,14 +86,19 @@ const isLoopbackRemoteAddress = (remoteAddress: string | undefined): boolean => 
   return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
 };
 
-export type AuthOutcome =
-  | { ok: true }
-  | { ok: false; status: 401 | 429; reason: string };
+export type AuthOutcome = { ok: true } | { ok: false; status: 401 | 429; reason: string };
+
+type CheckAuthorizedRequestOptions = {
+  allowQueryToken?: boolean;
+};
 
 // Single entry point used by every gated route. Returns ok=true when the
 // request is permitted; otherwise the route must immediately emit the
 // returned status code with the included reason.
-export const checkAuthorizedRequest = (request: IncomingMessage): AuthOutcome => {
+export const checkAuthorizedRequest = (
+  request: IncomingMessage,
+  options: CheckAuthorizedRequestOptions = {},
+): AuthOutcome => {
   const apiKey = readApiKey();
   const remoteAddress = request.socket.remoteAddress;
   const isLoopback = isLoopbackRemoteAddress(remoteAddress);
@@ -92,11 +115,14 @@ export const checkAuthorizedRequest = (request: IncomingMessage): AuthOutcome =>
       return {
         ok: false,
         status: 401,
-        reason: "OCTOGENT_API_KEY is required for non-loopback access (or set OCTOGENT_ALLOW_REMOTE_ACCESS=1 for a single-user dev box)",
+        reason:
+          "OCTOGENT_API_KEY is required for non-loopback access (or set OCTOGENT_ALLOW_REMOTE_ACCESS=1 for a single-user dev box)",
       };
     }
   } else {
-    const presented = extractBearerHeader(request);
+    const presented =
+      extractBearerHeader(request) ??
+      (options.allowQueryToken === true ? extractQueryToken(request) : null);
     if (presented === null || !constantTimeEquals(presented, apiKey)) {
       return {
         ok: false,
@@ -135,7 +161,7 @@ export const withCors = (headers: Record<string, string>, corsOrigin: string | n
   const nextHeaders: Record<string, string> = {
     ...headers,
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Octogent-Token",
   };
 
   if (corsOrigin) {
