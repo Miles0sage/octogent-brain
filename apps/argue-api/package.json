@@ -1,0 +1,26 @@
+{
+  "name": "@octogent/argue-api",
+  "version": "0.3.0-pre.1",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@octogent/core": "workspace:*",
+    "@octogent/supervisor": "workspace:*",
+    "@octogent/oracle": "workspace:*",
+    "@octogent/pr-fetcher": "workspace:*",
+    "better-sqlite3": "^11.3.0",
+    "nanoid": "^5.0.7",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/bun": "latest",
+    "msw": "^2.6.0",
+    "vitest": "^2.1.4"
+  }
+}
