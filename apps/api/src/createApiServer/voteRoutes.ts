@@ -17,15 +17,20 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 
 import {
+  isCmaRubric,
   isTerminalAgentProvider,
   parseReviewerVerdict,
+  type CmaRubric,
   type RoutingConfig,
   type TerminalAgentProvider,
 } from "@octogent/core";
 import {
+  buildCmaPromptInjection,
+  cmaGradeToReviewerVerdict,
   DEFAULT_VOTE_CONFIG,
   dispatchTask,
   loadRoutingConfig,
+  parseCmaGradeFromText,
   tallyVotes,
   type VoterVerdict,
 } from "@octogent/supervisor";
@@ -203,6 +208,27 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
   }
   const dryRun = fields.dryRun === true;
 
+  // v0.2 wave 1b (2026-05-12): optional CMA rubric portability. When a
+  // rubric is supplied, validate its shape up-front (before any spawn or
+  // cost-cap math) so a bad payload returns 400 immediately. The order
+  // here matters: C1 auth + cwd allowlist have already fired above; we
+  // intentionally validate the rubric AFTER cheap auth/shape checks and
+  // BEFORE expensive cost-cap math + fan-out. Absent rubric =>
+  // backward-compatible (no behavior change, no breaking surface).
+  let rubric: CmaRubric | null = null;
+  if (fields.rubric !== undefined) {
+    if (!isCmaRubric(fields.rubric)) {
+      writeJson(
+        response,
+        400,
+        { ok: false, error: "invalid CMA rubric shape" },
+        corsOrigin,
+      );
+      return true;
+    }
+    rubric = fields.rubric;
+  }
+
   const loaded = loadRoutingConfig();
   if (!loaded.ok) {
     writeJson(
@@ -353,14 +379,41 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
           },
         ],
       };
+      // v0.2 wave 1b: when a CMA rubric is supplied, prepend the
+      // injection prompt to taskInput. The voter LLM is asked to grade
+      // against the rubric and emit a CmaGradeResult JSON tail. The
+      // original request payload is NOT mutated — only the dispatched
+      // taskInput. Absent rubric => unchanged invocation.
+      const voterTaskInput =
+        rubric === null
+          ? (fields.taskInput as string)
+          : `${buildCmaPromptInjection(rubric)}\n\n${fields.taskInput as string}`;
       const result = await dispatchTask(scopedConfig, {
         taskType,
-        taskInput: fields.taskInput as string,
+        taskInput: voterTaskInput,
         cwd,
         dryRun,
       });
       const stdoutText = aggregateStdout(result.events);
-      const parsed = parseReviewerVerdict(stdoutText);
+      // Two-stage verdict extraction when a rubric is in play:
+      //   1. parseCmaGradeFromText scans the stdout tail for a balanced
+      //      CmaGradeResult JSON. If found, adapt to ReviewerVerdict via
+      //      cmaGradeToReviewerVerdict (preserves passed/failed +
+      //      collapses per-criterion scores into groundedness/specificity).
+      //   2. If no grade is parseable, fall back to the existing
+      //      parseReviewerVerdict path. The voter is NOT failed — the
+      //      tallyVotes contract treats null verdicts as unparseable.
+      let parsed = null as ReturnType<typeof parseReviewerVerdict>;
+      if (rubric !== null) {
+        const grade = parseCmaGradeFromText(stdoutText);
+        if (grade !== null) {
+          parsed = cmaGradeToReviewerVerdict(grade, rubric);
+        } else {
+          parsed = parseReviewerVerdict(stdoutText);
+        }
+      } else {
+        parsed = parseReviewerVerdict(stdoutText);
+      }
       return {
         provider,
         dispatch_id: result.dispatch_id,

@@ -4,9 +4,41 @@
 // @octogent/supervisor. The HTTP layer is the only place where I/O happens.
 
 import { DEFAULT_ROUTING_CONFIG, type RoutingConfig } from "@octogent/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { handleVoteDispatchRoute } from "../src/createApiServer/voteRoutes";
+
+// CMA wave 1b (2026-05-12): partial-mock @octogent/supervisor so the
+// rubric-injection test surface can capture the augmented taskInput that
+// gets passed into dispatchTask and synthesize voter stdout containing
+// `CmaGradeResult` JSON. `dispatchTask` defaults to passthrough so the
+// pre-existing 26 tests in this file (which rely on dryRun=true on the
+// real dispatcher) keep working without changes.
+const { mockDispatchTask, realSupervisor } = vi.hoisted(() => ({
+  mockDispatchTask: vi.fn(),
+  // Holder for the real module reference so we can install the
+  // passthrough default after vi.importActual resolves.
+  realSupervisor: { ref: null as unknown },
+}));
+vi.mock("@octogent/supervisor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@octogent/supervisor")>();
+  realSupervisor.ref = actual;
+  // Explicitly enumerate exports so the partial-mock namespace exposes
+  // every original symbol the test surface imports (vitest module
+  // namespaces don't always iterate via spread when consumers
+  // destructure named imports).
+  return {
+    DEFAULT_VOTE_CONFIG: actual.DEFAULT_VOTE_CONFIG,
+    tallyVotes: actual.tallyVotes,
+    loadRoutingConfig: actual.loadRoutingConfig,
+    dispatchTask: mockDispatchTask,
+    buildCmaPromptInjection: actual.buildCmaPromptInjection,
+    cmaGradeToReviewerVerdict: actual.cmaGradeToReviewerVerdict,
+    isCmaRubric: actual.isCmaRubric,
+    isCmaGradeResult: actual.isCmaGradeResult,
+    parseCmaGradeFromText: actual.parseCmaGradeFromText,
+  };
+});
 
 type ResponseLike = {
   status: number;
@@ -71,6 +103,21 @@ const buildPost = (
 };
 
 const buildRouteDeps = (workspaceCwd = process.cwd()) => ({ workspaceCwd } as never);
+
+// Global passthrough: every test starts with dispatchTask delegating to
+// the real implementation. CMA tests below override this with
+// mockImplementationOnce / mockImplementation to capture args + inject
+// synthetic stdout for the rubric-injection contract.
+beforeEach(() => {
+  const actual = realSupervisor.ref as
+    | typeof import("@octogent/supervisor")
+    | null;
+  if (actual !== null) {
+    mockDispatchTask.mockImplementation((...args) =>
+      actual.dispatchTask(...(args as Parameters<typeof actual.dispatchTask>)),
+    );
+  }
+});
 
 describe("voteRoutes — request validation", () => {
   it("returns 405 on GET", async () => {
@@ -654,5 +701,302 @@ describe("voteRoutes cost-cap — pre-flight enforcement + audit log", () => {
     expect(body.entries.length).toBeGreaterThan(0);
     // Should contain at least one vote-dispatched event.
     expect(body.entries.some((e) => e.event === "vote-dispatched")).toBe(true);
+  });
+});
+
+// =====================================================================
+// v0.2 wave 1b (2026-05-12) — CMA rubric portability wiring on the
+// /votes/dispatch surface. Six tests covering:
+//
+//   1. valid rubric is accepted + the injection prompt is prepended to
+//      each voter's taskInput (verified by capturing args to dispatchTask)
+//   2. invalid rubric shape => HTTP 400 (no dispatch attempted)
+//   3. when a voter emits valid CmaGradeResult JSON, the voter verdict is
+//      derived from cmaGradeToReviewerVerdict (not parseReviewerVerdict)
+//   4. when a rubric is supplied but the voter emits no parseable grade,
+//      fall back to parseReviewerVerdict — don't fail the vote
+//   5. order-of-checks: cost-cap pre-flight fires BEFORE rubric injection
+//      (no dispatch / no injection when the cap trips)
+//   6. order-of-checks: C1 auth fires BEFORE rubric handling (401 even
+//      when rubric is well-formed)
+// =====================================================================
+
+import {
+  buildCmaPromptInjection,
+  cmaGradeToReviewerVerdict,
+  type CmaGradeResult,
+  type CmaRubric,
+} from "@octogent/supervisor";
+
+const validRubric = (): CmaRubric => ({
+  rubric_id: "anthropic-cookbook-outcome-grader",
+  rubric_version: "1.0.0",
+  criteria: [
+    { name: "grounded", description: "Cites source files", weight: 0.6 },
+    { name: "concrete", description: "Uses concrete numbers", weight: 0.4 },
+  ],
+  passing_threshold: 0.8,
+});
+
+const validGrade = (overrides: Partial<CmaGradeResult> = {}): CmaGradeResult => ({
+  criterion_scores: { grounded: 0.9, concrete: 0.85 },
+  weighted_average: 0.88,
+  passed: true,
+  rationale: "All criteria above threshold.",
+  ...overrides,
+});
+
+const synthesizeDispatchResult = (
+  provider: import("@octogent/core").TerminalAgentProvider,
+  stdout: string,
+): Awaited<ReturnType<typeof import("@octogent/supervisor").dispatchTask>> => ({
+  dispatch_id: `mock-${provider}`,
+  taskType: "verify",
+  invocation: {
+    provider,
+    command: "echo",
+    args: [],
+    cwd: process.cwd(),
+    envFlags: [],
+  },
+  health: { healthy: true },
+  started_at_iso: new Date().toISOString(),
+  events: [{ kind: "stdout", data: stdout }],
+  exit_code: 0,
+  duration_ms: 0,
+});
+
+describe("voteRoutes wave-1b: CMA rubric injection contract", () => {
+  beforeEach(async () => {
+    delete process.env.OCTOGENT_API_KEY;
+    delete process.env.OCTOGENT_ALLOW_REMOTE_ACCESS;
+    const { resetAuthState } = await import("../src/createApiServer/security");
+    resetAuthState();
+    const { resetCostCapState } = await import("../src/cost-cap");
+    resetCostCapState();
+  });
+  afterEach(() => {
+    mockDispatchTask.mockReset();
+  });
+
+  it("accepts a valid CMA rubric in the dispatch payload and prepends the injection prompt", async () => {
+    // Capture the taskInput passed to dispatchTask. We use a passthrough
+    // that records the call args then returns a synthetic dry-run result
+    // (avoids real subprocess + keeps tally deterministic).
+    const captured: Array<{ taskInput: string; provider: string }> = [];
+    mockDispatchTask.mockImplementation(async (config, request) => {
+      const provider = (config.rules[0]?.preferred ?? "claude-code") as string;
+      captured.push({ taskInput: request.taskInput, provider });
+      return synthesizeDispatchResult(
+        provider as import("@octogent/core").TerminalAgentProvider,
+        "[dry-run] not spawned",
+      );
+    });
+
+    const rubric = validRubric();
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify this diff",
+      taskType: "verify",
+      providers: ["claude-code", "codex"],
+      rubric,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+
+    // The injection prompt is the deterministic output of
+    // buildCmaPromptInjection. Each voter's taskInput must START with
+    // that prompt + then the original taskInput (separated by blank line).
+    const expectedPrefix = buildCmaPromptInjection(rubric);
+    expect(captured.length).toBe(2);
+    for (const c of captured) {
+      expect(c.taskInput.startsWith(expectedPrefix)).toBe(true);
+      expect(c.taskInput).toContain("verify this diff");
+    }
+  });
+
+  it("rejects an invalid CMA rubric shape with HTTP 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: ["claude-code"],
+      // Invalid: criteria is empty.
+      rubric: {
+        rubric_id: "bad",
+        rubric_version: "1.0.0",
+        criteria: [],
+        passing_threshold: 0.8,
+      },
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      ok?: boolean;
+      error: string;
+    };
+    expect(body.error).toMatch(/CMA rubric/i);
+    // dispatchTask must NOT have fired — invalid rubric is rejected
+    // before fan-out.
+    expect(mockDispatchTask).not.toHaveBeenCalled();
+  });
+
+  it("transforms CMA grade response into ReviewerVerdict via cmaGradeToReviewerVerdict", async () => {
+    const rubric = validRubric();
+    const grade = validGrade({
+      criterion_scores: { grounded: 0.95, concrete: 0.92 },
+      weighted_average: 0.94,
+      passed: true,
+      rationale: "Strong grounding.",
+    });
+    // Voter stdout = preamble + final balanced JSON object (the grade).
+    // parseCmaGradeFromText picks the LAST balanced JSON.
+    const voterStdout = `Some preamble.\n\n${JSON.stringify(grade)}\n`;
+    mockDispatchTask.mockImplementation(async (config) => {
+      const provider = (config.rules[0]?.preferred ?? "claude-code") as string;
+      return synthesizeDispatchResult(
+        provider as import("@octogent/core").TerminalAgentProvider,
+        voterStdout,
+      );
+    });
+
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: ["claude-code"],
+      rubric,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      outcome: {
+        verdicts: Array<{
+          provider: string;
+          verdict: { verdict: string; scores: { groundedness: number } } | null;
+        }>;
+      };
+    };
+    const expected = cmaGradeToReviewerVerdict(grade, rubric);
+    expect(body.outcome.verdicts).toHaveLength(1);
+    const voter = body.outcome.verdicts[0]!;
+    expect(voter.verdict).not.toBeNull();
+    expect(voter.verdict?.verdict).toBe(expected.verdict);
+    expect(voter.verdict?.scores.groundedness).toBeCloseTo(
+      expected.scores.groundedness,
+      6,
+    );
+  });
+
+  it("falls back to parseReviewerVerdict when rubric supplied but voter emits no parseable grade", async () => {
+    const rubric = validRubric();
+    // Stdout contains a regular ReviewerVerdict JSON tail — NOT a
+    // CmaGradeResult shape. parseCmaGradeFromText must return null and
+    // the route must fall back to parseReviewerVerdict rather than
+    // producing a null voter.
+    const reviewerVerdict = {
+      verdict: "pass",
+      improvements_exhausted: false,
+      issues: [],
+      scores: { groundedness: 0.9, specificity: 0.88 },
+    };
+    const voterStdout = `reasoning...\n${JSON.stringify(reviewerVerdict)}\n`;
+    mockDispatchTask.mockImplementation(async (config) => {
+      const provider = (config.rules[0]?.preferred ?? "claude-code") as string;
+      return synthesizeDispatchResult(
+        provider as import("@octogent/core").TerminalAgentProvider,
+        voterStdout,
+      );
+    });
+
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: ["claude-code"],
+      rubric,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      outcome: {
+        verdicts: Array<{
+          verdict:
+            | {
+                verdict: string;
+                scores: { groundedness: number; specificity: number };
+              }
+            | null;
+        }>;
+      };
+    };
+    expect(body.outcome.verdicts).toHaveLength(1);
+    const voter = body.outcome.verdicts[0]!;
+    // Verdict must come from parseReviewerVerdict path, not null.
+    expect(voter.verdict).not.toBeNull();
+    expect(voter.verdict?.verdict).toBe("pass");
+    expect(voter.verdict?.scores.groundedness).toBeCloseTo(0.9, 6);
+    expect(voter.verdict?.scores.specificity).toBeCloseTo(0.88, 6);
+  });
+
+  it("rubric injection composes with cost-cap pre-flight gate (cost gate fires first)", async () => {
+    const prevDispatchEnv = process.env.OCTOGENT_PER_DISPATCH_USD;
+    process.env.OCTOGENT_PER_DISPATCH_USD = "0.000001";
+    try {
+      const { resetCostCapState } = await import("../src/cost-cap");
+      resetCostCapState();
+      const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+        taskInput: "verify",
+        taskType: "verify",
+        providers: ["claude-code"],
+        rubric: validRubric(),
+      });
+      const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+      expect(handled).toBe(true);
+      // Cap fires BEFORE any rubric work => HTTP 402, no dispatchTask call.
+      expect(ctx.responseStub.status).toBe(402);
+      expect(mockDispatchTask).not.toHaveBeenCalled();
+    } finally {
+      if (prevDispatchEnv === undefined) {
+        delete process.env.OCTOGENT_PER_DISPATCH_USD;
+      } else {
+        process.env.OCTOGENT_PER_DISPATCH_USD = prevDispatchEnv;
+      }
+      const { resetCostCapState } = await import("../src/cost-cap");
+      resetCostCapState();
+    }
+  });
+
+  it("rubric injection composes with C1 auth gate (auth fires first)", async () => {
+    const prevKey = process.env.OCTOGENT_API_KEY;
+    process.env.OCTOGENT_API_KEY = "test-secret-abc";
+    try {
+      const { resetAuthState } = await import("../src/createApiServer/security");
+      resetAuthState();
+      // No Authorization header — must fail at the auth gate, never
+      // reach rubric validation OR dispatch.
+      const ctx = buildPost(
+        "http://x.test/api/claude-brain/votes/dispatch",
+        {
+          taskInput: "verify",
+          taskType: "verify",
+          providers: ["claude-code"],
+          rubric: validRubric(),
+        },
+        { remoteAddress: "127.0.0.1" },
+      );
+      const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+      expect(handled).toBe(true);
+      expect(ctx.responseStub.status).toBe(401);
+      expect(mockDispatchTask).not.toHaveBeenCalled();
+    } finally {
+      if (prevKey === undefined) {
+        delete process.env.OCTOGENT_API_KEY;
+      } else {
+        process.env.OCTOGENT_API_KEY = prevKey;
+      }
+      const { resetAuthState } = await import("../src/createApiServer/security");
+      resetAuthState();
+    }
   });
 });

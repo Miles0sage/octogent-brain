@@ -79,6 +79,20 @@ This repo is a personal exploration of what an AI coding environment might look 
 See [`docs/concepts/cost-cap.md`](./docs/concepts/cost-cap.md) for the full
 contract.
 
+### CMA rubric portability (v0.2)
+
+Octogent adopts Anthropic's outcome-grader schema as its voter input
+contract — paste an Anthropic-published rubric, get the same rubric
+graded across Claude / Codex / Gemini, vote mechanically. We don't
+compete with Anthropic Managed Agents; we route their pattern across
+vendors they structurally cannot reach. `POST
+/api/claude-brain/votes/dispatch` gains an optional `rubric` field
+(validated via `isCmaRubric`); each voter is prompted with
+`buildCmaPromptInjection(rubric)` and parsed via
+`parseCmaGradeFromText` + `cmaGradeToReviewerVerdict` before tally. See
+[`docs/concepts/cma-portability.md`](./docs/concepts/cma-portability.md)
+for the full contract.
+
 A **tentacle** is a folder under `.octogent/tentacles/<tentacle-id>/` that holds agent-readable markdown such as `CONTEXT.md`, `todo.md`, and any extra notes needed for that slice of the codebase.
 
 The octopus metaphor is literal: *one octopus, many tentacles, different work happening at the same time*.

@@ -69,15 +69,31 @@ in this repository are documented here. This project adheres to
   tier matrix, env vars, audit-log shape, and UX surfaces. Cross-linked
   from the README's new "Cost caps + audit log (v0.2)" subsection.
 
+### Added (wave 1b — api wiring)
+
+- **Voter-route rubric injection.** `apps/api`'s
+  `POST /api/claude-brain/votes/dispatch` now accepts an optional
+  `rubric` field. When present, the rubric is validated via
+  `isCmaRubric` (400 on bad shape), prepended to each voter's
+  `taskInput` via `buildCmaPromptInjection(rubric)`, and each voter's
+  stdout is scanned with `parseCmaGradeFromText` then adapted through
+  `cmaGradeToReviewerVerdict(grade, rubric)` before `tallyVotes`. The
+  C1 auth gate and the wave-2 cost-cap pre-flight refusal both fire
+  BEFORE rubric work — order of checks preserved.
+- **Two-stage verdict extraction.** When a rubric is supplied but the
+  voter emits no parseable `CmaGradeResult`, the route falls back to
+  the existing `parseReviewerVerdict` path so a vote is never failed
+  for an unparseable tail (`tallyVotes` treats null verdicts as
+  unparseable per its existing contract). Absent rubric =>
+  byte-for-byte backward compatible.
+- **Docs.** `docs/concepts/cma-portability.md` documents the schema,
+  the why (adopt Anthropic's pattern, don't compete with it), and the
+  curl example. README gains a "CMA rubric portability (v0.2)"
+  subsection cross-linked to the concept doc + the locked spec at
+  `docs/superpowers/specs/2026-05-12-cma-rubric-portability.md`.
+
 ### Deferred to v0.2.x
 
-- **Voter-route rubric injection (wave 1b).** `apps/api`'s
-  `POST /api/claude-brain/votes/dispatch` will gain an optional
-  `rubric: CmaRubric` field that prefixes each voter prompt via
-  `buildCmaPromptInjection` and runs each response through
-  `parseCmaGradeFromText` + `cmaGradeToReviewerVerdict` before
-  `tallyVotes`. Backward-compatible — absent rubric falls back to the
-  current free-form `ReviewerVerdict` tail.
 - **Driver-level cost-cap.** The wave-2 layer enforces caps at the
   `voteRoutes` boundary. The deeper per-driver SIGTERM enforcement
   described in
