@@ -1,0 +1,8 @@
+{
+  "url": "https://github.com/anthropics/sdk-python/pull/421",
+  "sha": "deadbeefcafe1234567890abcdef0123456789ab",
+  "title": "fix: race condition in async retry handler",
+  "description": "Closes #420. The previous retry logic had a race where two retries could fire simultaneously.",
+  "diff": "diff --git a/sdk/retry.py b/sdk/retry.py\n@@ -42,7 +42,9 @@\n-    if self.attempts < MAX:\n+    async with self._lock:\n+        if self.attempts < MAX:\n+            self.attempts += 1\n",
+  "ciStatus": "failure"
+}
