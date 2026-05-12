@@ -16,6 +16,16 @@
     "enabled": true
   },
   "files": {
-    "ignore": ["node_modules", "dist", "coverage"]
+    "ignore": [
+      "node_modules",
+      "dist",
+      "coverage",
+      ".omc",
+      ".planning",
+      "vendor",
+      "apps/argue-api/db",
+      "packages/pr-fetcher/tests/*.test.js",
+      "packages/pr-fetcher/tests/*.test.d.ts"
+    ]
   }
 }

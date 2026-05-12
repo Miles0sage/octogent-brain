@@ -17,10 +17,7 @@
     "url": "https://github.com/Miles0sage/octogent-brain.git",
     "directory": "packages/core"
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "build:dist": "tsc -p tsconfig.build.json",
