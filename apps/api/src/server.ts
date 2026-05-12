@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { createApiServer } from "./createApiServer";
+import { warnInsecureConfig } from "./createApiServer/security";
 
 const parsePort = (value: string | undefined, fallback: number) => {
   if (!value) {
@@ -45,11 +46,14 @@ const validateStartupEnv = () => {
     );
   }
 
-  if (allowRemoteAccess && !(process.env.OCTOGENT_API_KEY?.trim().length ?? 0)) {
-    console.warn(
-      "OCTOGENT_ALLOW_REMOTE_ACCESS=1 is enabled without OCTOGENT_API_KEY. The dashboard will be reachable without authentication. Prefer setting OCTOGENT_API_KEY and opening the UI with ?octogent_token=<key>.",
-    );
-  }
+  // L3 audit r3 H3 (2026-05-12): centralized insecure-config warning.
+  // warnInsecureConfig() covers both:
+  //   - allowRemoteAccess=true + no API key (single-user dev VPS)
+  //   - non-loopback HOST bind + no API key (operator forgot to set the
+  //     escape hatch but still exposed 0.0.0.0 / a public iface)
+  // Both are non-fatal: we warn and continue so existing dev workflows
+  // are not broken, but the operator sees a one-line stderr nudge.
+  warnInsecureConfig(host, { allowRemoteAccess });
 };
 
 validateStartupEnv();

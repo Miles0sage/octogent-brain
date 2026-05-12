@@ -42,6 +42,7 @@ import {
   getSessionUsage,
   loadCostCapConfig,
   recordSpend,
+  redactAuditEntry,
   type CostCapVerdict,
   type CostEstimate,
 } from "../cost-cap";
@@ -66,6 +67,12 @@ const COST_CAP_AUDIT_PATH = "/api/claude-brain/cost-cap/audit";
 // /tmp/octogent-audit.jsonl. We also keep a small in-memory ring buffer
 // so the Spend subtab can render the last 100 entries without re-reading
 // the file every request.
+// L3 audit r3 H4 (2026-05-12): the audit entry shape now carries
+// optional taskInput/rubric fields. These are NEVER persisted in plain
+// text by default — `redactAuditEntry` (cost-cap.ts) replaces them with
+// `<redacted N chars>` placeholders. Operators on isolated hosts who
+// need the full payload for SOC2 evidence collection can opt in with
+// OCTOGENT_AUDIT_LOG_INCLUDE_PAYLOAD=1.
 type CostCapAuditEntry = {
   ts: string;
   event: "vote-dispatched" | "cap-fire" | "voter-completed";
@@ -76,19 +83,27 @@ type CostCapAuditEntry = {
   reason?: string;
   provider?: string;
   actualUsd?: number;
+  // Redactable fields — see redactAuditEntry in cost-cap.ts.
+  taskInput?: string;
+  rubric?: unknown;
 };
 
 const AUDIT_RING_CAP = 100;
 const auditRing: CostCapAuditEntry[] = [];
 
 const emitAudit = (entry: CostCapAuditEntry): void => {
-  auditRing.push(entry);
+  // L3 audit r3 H4 (2026-05-12): redact taskInput/rubric/prompt before
+  // both ring-buffer insertion and JSONL append. The Spend subtab + the
+  // SIEM file path see the same redacted view; redaction is a property
+  // of the emitter, not the consumer.
+  const redacted = redactAuditEntry(entry);
+  auditRing.push(redacted);
   if (auditRing.length > AUDIT_RING_CAP) {
     auditRing.splice(0, auditRing.length - AUDIT_RING_CAP);
   }
   const path = process.env.OCTOGENT_AUDIT_LOG ?? "/tmp/octogent-audit.jsonl";
   try {
-    appendFileSync(path, JSON.stringify(entry) + "\n");
+    appendFileSync(path, JSON.stringify(redacted) + "\n");
   } catch {
     // Audit log write failure is non-fatal: the in-memory ring buffer
     // still serves the Spend subtab. Errors here are intentionally
@@ -320,6 +335,12 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
       estimatedUsd: estimates.reduce((a, e) => a + e.estimatedUsd, 0),
       capUsd: capVerdict.capUsd,
       reason: capVerdict.reason,
+      // L3 audit r3 H4 (2026-05-12): include taskInput/rubric in the
+      // audit entry. emitAudit redacts both fields by default; the
+      // OCTOGENT_AUDIT_LOG_INCLUDE_PAYLOAD=1 opt-in surfaces them in
+      // full for SOC2 evidence collection.
+      taskInput: fields.taskInput as string,
+      ...(rubric === null ? {} : { rubric }),
     });
     writeJson(
       response,
@@ -479,6 +500,9 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
     sessionId,
     providers,
     estimatedUsd: estimates.reduce((a, e) => a + e.estimatedUsd, 0),
+    // L3 audit r3 H4 (2026-05-12): see cap-fire path above.
+    taskInput: fields.taskInput as string,
+    ...(rubric === null ? {} : { rubric }),
   });
 
   writeJson(

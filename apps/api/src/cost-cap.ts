@@ -213,3 +213,47 @@ export const getDailySpend = (now: number = Date.now()): { daySpentUsd: number; 
 export const resetCostCapState = (): void => {
   sessionUsage.clear();
 };
+
+// L3 audit r3 H4 (2026-05-12): audit-log payload redaction.
+//
+// The cost-cap audit JSONL is consumed by SIEM exporters and the Spend
+// subtab. By default, the audit log should record WHAT happened
+// (dispatch event, providers, cost, cap-fire reason) — NOT the content
+// of the operator's prompt or rubric. Rubric prompts in particular can
+// embed third-party secrets (a user pastes an API key into a verifier
+// prompt; that key must not land in /tmp/octogent-audit.jsonl in plain
+// text).
+//
+// Default behavior: any entry field named `taskInput`, `rubric`, or
+// `prompt` is replaced with `<redacted N chars>` (so reviewers still
+// see the size envelope, useful for sizing checks). Operators who need
+// the full payload — e.g. for SOC2 evidence collection on an isolated
+// host — opt in with OCTOGENT_AUDIT_LOG_INCLUDE_PAYLOAD=1.
+const REDACTABLE_AUDIT_FIELDS = ["taskInput", "rubric", "prompt"] as const;
+
+export const auditPayloadIncluded = (): boolean =>
+  process.env.OCTOGENT_AUDIT_LOG_INCLUDE_PAYLOAD === "1";
+
+export const redactAuditEntry = <T extends Record<string, unknown>>(entry: T): T => {
+  if (auditPayloadIncluded()) {
+    return entry;
+  }
+  const out: Record<string, unknown> = { ...entry };
+  for (const field of REDACTABLE_AUDIT_FIELDS) {
+    if (field in out && out[field] !== undefined && out[field] !== null) {
+      const raw = out[field];
+      let length = 0;
+      if (typeof raw === "string") {
+        length = raw.length;
+      } else {
+        try {
+          length = JSON.stringify(raw).length;
+        } catch {
+          length = 0;
+        }
+      }
+      out[field] = `<redacted ${length} chars>`;
+    }
+  }
+  return out as T;
+};
