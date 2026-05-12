@@ -75,7 +75,12 @@ export const isCwdAllowed = (candidate: string, workspaceCwd: string): boolean =
 };
 
 // GET /api/claude-brain/drivers — list configured drivers + their live
-// health probe results. Used by the upcoming "Drivers" dashboard panel.
+// health probe results. Used by the "Drivers" dashboard panel.
+//
+// Codex audit 2026-05-12: gate behind bearer/loopback auth. Health probes
+// spawn subprocesses (resource cost) and the provider list is a recon
+// signal (which CLIs the host can reach). Gating the whole GET matches
+// the rate-limited POST contract already in place for /drivers/dispatch.
 export const handleDriversListRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
 ) => {
@@ -84,6 +89,12 @@ export const handleDriversListRoute: ApiRouteHandler = async (
   }
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
 
