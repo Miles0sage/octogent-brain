@@ -73,3 +73,5 @@ export {
 
 export { argue, CLIS } from "./argue";
 export type { CliName, RawVerdict, IssueCitation, Prior, ArgueInput, ArgueOpts } from "./argue";
+
+export { dispatchAll } from "./dispatchers";
