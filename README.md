@@ -4,10 +4,11 @@
 <br/>
 <br/>
 
-<strong>too many terminals, not enough tentacles</strong>
+<strong>Three LLMs vote on every diff. Local. Free. The verifier Anthropic can't ship.</strong>
 <br />
 <br />
 
+[![npm](https://img.shields.io/npm/v/@octogent/supervisor?style=flat-square)](https://www.npmjs.com/package/@octogent/supervisor)
 ![Last Update](https://img.shields.io/github/last-commit/hesamsheikh/octogent?label=Last%20Update&style=flat-square)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-5FA04E?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -16,14 +17,149 @@
 
 </div>
 
-# Octogent (claude-brain fork)
+# Octogent — cross-vendor mechanical supervision for AI coding agents
 
-> **Fork notice.** This is a `claude-brain`-extended fork of
-> [`hesamsheikh/octogent`](https://github.com/hesamsheikh/octogent) by Hesam Sheikhalishahi.
-> All upstream features remain intact. Additions are documented in
-> [`CLAUDE_BRAIN_INTEGRATION.md`](./CLAUDE_BRAIN_INTEGRATION.md): three new
-> `/api/claude-brain/*` endpoints, a `Brain` panel surfacing the self-improvement
-> daemons, and a small host-bind patch for Tailscale exposure. MIT license preserved.
+## Quickstart
+
+```bash
+npm install @octogent/supervisor @octogent/core
+```
+
+Spawn three voters across three vendors, collect their verdicts, tally the
+vote mechanically. No vendor reviews its own diff:
+
+```ts
+import { dispatchTask, tallyVotes, loadRoutingConfig, DEFAULT_VOTE_CONFIG,
+         parseReviewerVerdict, type VoterVerdict } from "@octogent/supervisor";
+
+const { config } = await loadRoutingConfig({ cwd: process.cwd() });
+const task = { taskType: "verify", taskInput: "Does this diff cite the source files it touches?", cwd: process.cwd() };
+
+const runs = await Promise.all(
+  ["claude-code", "codex", "gemini-cli"].map(() => dispatchTask(config, task)),
+);
+const verdicts: VoterVerdict[] = runs.map((r) => ({
+  provider: r.invocation?.provider ?? "unknown",
+  verdict: parseReviewerVerdict(r.events.map((e) => ("data" in e ? e.data ?? "" : "")).join("")),
+  raw_output: r.events.map((e) => ("data" in e ? e.data ?? "" : "")).join(""),
+}));
+
+console.log(tallyVotes(verdicts, DEFAULT_VOTE_CONFIG));
+// → { winner: "pass" | "fail" | "no-consensus", reason, consensus_count, dissent_count, verdicts }
+```
+
+## What it does
+
+Octogent is mechanical supervision for AI coding agents. Every diff your agent
+produces is reviewed by a *different vendor's* model before it touches your
+repo — Aider writes, Claude reviews, Codex breaks ties. It runs locally, costs
+nothing extra beyond the API keys you already have, and catches the class of
+confabulation that single-vendor self-review rubber-stamps. Because the
+reviewer is structurally not the writer, no Anthropic, OpenAI, or Anysphere
+release can ship this — it requires a third party who is willing to route
+across all three.
+
+**What it catches that single-vendor self-review doesn't:**
+
+- Rubber-stamp "pass" verdicts that omit the groundedness/specificity numbers
+  the rubric demanded — `parseReviewerVerdict` rejects, `tallyVotes` records
+  it as unparseable instead of letting it slip.
+- Missing JSON tail / hallucinated tool output — voters that fail to emit a
+  parseable verdict can't carry the vote.
+- Cross-vendor disagreement on the same diff — when Claude says pass and
+  Codex says fail with low groundedness, `strong-reject` fires and the diff
+  is blocked regardless of majority.
+
+![90s demo](./docs/launch/demo-90s.gif)
+
+### Fork notice
+
+This is a `claude-brain`-extended fork of
+[`hesamsheikh/octogent`](https://github.com/hesamsheikh/octogent) by Hesam
+Sheikhalishahi. All upstream features — tentacles, scoped context, the
+`todo.md` execution surface, the multi-terminal orchestration UI — remain
+intact and unmodified. The v0.2 additions (cross-vendor vote, CMA rubric
+portability, cost caps, audit log, the `@octogent/supervisor` npm package)
+are layered on top. Upstream attribution and the MIT license are preserved.
+
+## Cross-CLI drivers
+
+Octogent dispatches across four installed CLIs over stdio. Each driver is
+declared in `routing.json` (copy `routing.example.json`); the dispatcher
+refuses to spawn anything not on the allowlist and forwards only the env
+variables a driver explicitly declares in `requiredEnv`.
+
+| Provider      | Command       | Role                       | Transport | Health |
+|---------------|---------------|----------------------------|-----------|--------|
+| `claude-code` | `claude`      | evaluator                  | stdio     | ready  |
+| `aider`       | `aider`       | writer                     | stdio     | ready  |
+| `codex`       | `codex exec`  | evaluator (tie-breaker)    | stdio     | ready  |
+| `gemini-cli`  | `gemini`      | intel                      | stdio     | ready  |
+
+See [`docs/concepts/runtime-and-api.md`](./docs/concepts/runtime-and-api.md)
+for the full driver contract.
+
+### claude-brain integration
+
+The Brain panel and three `/api/claude-brain/*` endpoints expose the
+self-improvement daemons that ship cross-vendor verdicts back into a Darwin
+dataset. Details in
+[`CLAUDE_BRAIN_INTEGRATION.md`](./CLAUDE_BRAIN_INTEGRATION.md).
+
+## CMA rubric portability (v0.2)
+
+Octogent adopts Anthropic's outcome-grader schema from
+[`claude-cookbooks` PR #599](https://github.com/anthropics/claude-cookbooks)
+(2026-05-06) as the voter input contract. Paste an Anthropic-published
+rubric, get the same rubric graded across Claude / Codex / Gemini, vote
+mechanically. We don't compete with Anthropic Managed Agents — we route
+their pattern across vendors they structurally cannot reach.
+
+```ts
+await fetch("http://localhost:8787/api/claude-brain/votes/dispatch", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    taskInput: "Does this diff cite the source files it touches?",
+    taskType: "verify",
+    providers: ["claude-code", "codex", "gemini-cli"],
+    rubric: { rubric_id: "anthropic-cookbook-outcome-grader", rubric_version: "1.0.0",
+              criteria: [{ name: "grounded", description: "Cites source files", weight: 1.0 }],
+              passing_threshold: 0.8 },
+  }),
+});
+```
+
+Full contract at [`docs/concepts/cma-portability.md`](./docs/concepts/cma-portability.md).
+
+## Cost caps + audit log (v0.2)
+
+Three layered caps — per-dispatch, per-session, per-day — hard-stop the
+cross-vendor vote route before any subprocess spawns. Configurable via
+`OCTOGENT_PER_DISPATCH_USD`, `OCTOGENT_PER_SESSION_USD`,
+`OCTOGENT_PER_DAY_USD`. Tripping the cap returns HTTP 402 with a structured
+`capError` body. Every fire writes a JSONL audit entry to
+`OCTOGENT_AUDIT_LOG` (default `/tmp/octogent-audit.jsonl`). The UI surfaces a
+stat-tile next to the Claude usage rail and a pre-flight pill on the vote
+button. The Spend subtab is tier-gated via `OCTOGENT_TIER=small-co`.
+
+Full contract at [`docs/concepts/cost-cap.md`](./docs/concepts/cost-cap.md).
+
+## Status / roadmap
+
+- **v0.1** ✓ cross-vendor verifier loop, 4 stdio drivers, dashboard, vote tally
+- **v0.2** ✓ CMA rubric portability + 3-layer cost caps + audit log + npm publish
+- **v0.3** (deferred) — Darwin loop (we learn from rejected dispatches across
+  vendors), tool-call routing, marketplace adapters
+
+The roadmap is brand-compounding: every rejected vote across vendors enriches
+a dataset Anthropic can't collect, because Anthropic can't route to Codex.
+
+## Upstream — what the fork inherits
+
+Below this line is the original `hesamsheikh/octogent` README content,
+preserved verbatim where the upstream behavior is unchanged. The
+cross-vendor verifier and v0.2 additions above layer on top of it.
 
 It's really not fun to have **ten Claude Code sessions open at once**, constantly switching between them and trying to remember what each one was supposed to do. *Things get blurry fast* when one agent is doing documentation, another is touching the database, another is changing the API, and another is somewhere in the frontend. **Octogent** tries to fix that by giving each job its own <u>scoped context, notes, and task list</u>, while also making it possible for Claude Code to **spawn other Claude Code agents**, assign them work, and communicate with them.
 
@@ -59,39 +195,6 @@ This repo is a personal exploration of what an AI coding environment might look 
 - **Supports inter-agent messaging** so workers and coordinators can report completion, blockers, and handoff notes
 - **Keeps agent-facing context in files** so the system is more durable than a single prompt thread
 - **Provides a local API and UI** for terminal lifecycle, persistence, websocket transport, and orchestration
-
-### Cost caps + audit log (v0.2)
-
-- **3-layer cost cap** — per-dispatch / per-session / per-day, configurable
-  via `OCTOGENT_PER_DISPATCH_USD`, `OCTOGENT_PER_SESSION_USD`,
-  `OCTOGENT_PER_DAY_USD`. The cross-vendor vote route refuses to spawn any
-  subprocess when the layered cap would trip (HTTP 402 + structured
-  `capError` body).
-- **Stat-tile** — left of the Claude usage rail. `$X.XX / $YY.YY` + a
-  10-segment bar. Slate < 50%, amber 50-90%, red+pulse 90-100%.
-- **Pre-flight pill** — next to the "Run cross-vendor vote" button. Estimated
-  cost + voter count before commitment; flips to "Would exceed daily cap"
-  when the per-day ceiling is in reach.
-- **Spend subtab** — tier-gated (`OCTOGENT_TIER=small-co`). Tails the
-  in-memory audit ring + exports CSV for SIEM ingestion. JSONL on disk at
-  `OCTOGENT_AUDIT_LOG` (default `/tmp/octogent-audit.jsonl`).
-
-See [`docs/concepts/cost-cap.md`](./docs/concepts/cost-cap.md) for the full
-contract.
-
-### CMA rubric portability (v0.2)
-
-Octogent adopts Anthropic's outcome-grader schema as its voter input
-contract — paste an Anthropic-published rubric, get the same rubric
-graded across Claude / Codex / Gemini, vote mechanically. We don't
-compete with Anthropic Managed Agents; we route their pattern across
-vendors they structurally cannot reach. `POST
-/api/claude-brain/votes/dispatch` gains an optional `rubric` field
-(validated via `isCmaRubric`); each voter is prompted with
-`buildCmaPromptInjection(rubric)` and parsed via
-`parseCmaGradeFromText` + `cmaGradeToReviewerVerdict` before tally. See
-[`docs/concepts/cma-portability.md`](./docs/concepts/cma-portability.md)
-for the full contract.
 
 A **tentacle** is a folder under `.octogent/tentacles/<tentacle-id>/` that holds agent-readable markdown such as `CONTEXT.md`, `todo.md`, and any extra notes needed for that slice of the codebase.
 
@@ -144,7 +247,7 @@ Octogent separates three concerns that usually get mixed together in a pile of t
 
 Deck reads the tentacle files directly, parses checkbox items from `todo.md`, and uses incomplete items to generate worker prompts. Claude hooks feed the API with agent state, transcript, and idle events so the UI can show more than raw terminal output.
 
-## Quick start
+## Local development
 
 <details>
 <summary><strong>Local development</strong></summary>
@@ -160,10 +263,6 @@ This starts the API and web app for local development.
 
 <details open>
 <summary><strong>Current install status</strong></summary>
-
-```bash
-Octogent is not published to the npm registry yet.
-```
 
 For local development:
 
@@ -181,7 +280,9 @@ npm install -g .
 octogent
 ```
 
-The registry install flow `npm install -g octogent` will only work after the package is published.
+The `@octogent/supervisor` package on npm provides the cross-vendor vote
+substrate as a library. The full `octogent` CLI / UI is not yet published to
+npm — install from a clone for the dashboard.
 
 </details>
 
@@ -237,6 +338,8 @@ release.
 - [Mental Model](docs/concepts/mental-model.md)
 - [Tentacles](docs/concepts/tentacles.md)
 - [Runtime and API](docs/concepts/runtime-and-api.md)
+- [CMA rubric portability](docs/concepts/cma-portability.md)
+- [Cost caps + audit log](docs/concepts/cost-cap.md)
 - [Working With Todos](docs/guides/working-with-todos.md)
 - [Orchestrating Child Agents](docs/guides/orchestrating-child-agents.md)
 - [Inter-Agent Messaging](docs/guides/inter-agent-messaging.md)
