@@ -40,6 +40,57 @@ describe("DEFAULT_ROUTING_CONFIG", () => {
     expect(claudeDriver?.transport).toBe("stdio");
     expect(claudeDriver?.baseArgs).toEqual(["--print", "--permission-mode", "plan"]);
   });
+
+  // Wired 2026-05-12: codex migrated from `transport: "pty"` (deferred /
+  // health-failed: transport-unsupported) to `transport: "stdio"` using
+  // the codex 0.130.0+ `codex exec` non-interactive subcommand. This
+  // unblocks codex as the 4th cross-vendor voter in the Generator-
+  // Evaluator loop.
+  it("codex driver default shape uses `codex exec` non-interactive subcommand", () => {
+    const codex = DEFAULT_ROUTING_CONFIG.drivers.find(
+      (d) => d.provider === "codex",
+    );
+    expect(codex).toBeDefined();
+    expect(codex?.transport).toBe("stdio");
+    expect(codex?.command).toBe("codex");
+    expect(codex?.baseArgs).toEqual([
+      "exec",
+      "--color",
+      "never",
+      "--skip-git-repo-check",
+      "-s",
+      "read-only",
+    ]);
+  });
+
+  it("codex driver default args are SAFE_FLAG_PATTERN-compliant (kebab-case flags + value tokens only)", () => {
+    // No standalone SAFE_FLAG_PATTERN validator ships today — the
+    // dispatcher relies on (a) DriverSpec.baseArgs being a string[] and
+    // (b) the `--` end-of-options separator in buildInvocation to bound
+    // user input. As a defensive contract we assert every baseArg token
+    // matches a conservative shape: short flags (`-x`), long flags
+    // (`--foo`), and bare value tokens of `[A-Za-z0-9_./-]+`. This guards
+    // against future drift (e.g. someone appending `--exec='rm -rf /'`).
+    const codex = DEFAULT_ROUTING_CONFIG.drivers.find(
+      (d) => d.provider === "codex",
+    );
+    expect(codex).toBeDefined();
+    const safeArgPattern = /^(--?[A-Za-z][A-Za-z0-9-]*|[A-Za-z0-9_./-]+)$/;
+    for (const arg of codex?.baseArgs ?? []) {
+      expect(arg).toMatch(safeArgPattern);
+    }
+  });
+
+  it("codex driver default args do not include `--dangerously-*` or `--bypass-*` tokens", () => {
+    const codex = DEFAULT_ROUTING_CONFIG.drivers.find(
+      (d) => d.provider === "codex",
+    );
+    expect(codex).toBeDefined();
+    for (const arg of codex?.baseArgs ?? []) {
+      expect(arg).not.toMatch(/^--dangerously-/);
+      expect(arg).not.toMatch(/^--bypass-/);
+    }
+  });
 });
 
 describe("validateRoutingConfig", () => {

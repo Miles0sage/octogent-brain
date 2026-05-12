@@ -5,6 +5,13 @@ import type {
   MonitorConfigPatchRequest,
   UseMonitorRuntimeResult,
 } from "../app/hooks/useMonitorRuntime";
+import {
+  fetchCostCapAudit,
+  fetchCostCapStatus,
+  formatUsd,
+  type CostCapAuditEntry,
+  type CostCapStatus,
+} from "../lib/cost-cap-client";
 import { ActionButton } from "./ui/ActionButton";
 
 type MonitorPrimaryViewProps = {
@@ -20,7 +27,7 @@ type MonitorPrimaryViewProps = {
   >;
 };
 
-type MonitorSubtabId = "resources" | "configure";
+type MonitorSubtabId = "resources" | "configure" | "spend";
 type MonitorProviderId = "x";
 
 const MONITOR_PROVIDER_TABS: Array<{
@@ -29,7 +36,7 @@ const MONITOR_PROVIDER_TABS: Array<{
   icon: string;
 }> = [{ id: "x", label: "X Monitor", icon: "𝕏" }];
 
-const MONITOR_SUBTABS: Array<{ id: MonitorSubtabId; label: string }> = [
+const BASE_MONITOR_SUBTABS: Array<{ id: MonitorSubtabId; label: string }> = [
   { id: "resources", label: "Resources" },
   { id: "configure", label: "Configure" },
 ];
@@ -71,6 +78,67 @@ export const MonitorPrimaryView = ({ monitorRuntime }: MonitorPrimaryViewProps) 
   const [maxPostsDraft, setMaxPostsDraft] = useState("30");
   const [searchWindowDaysDraft, setSearchWindowDaysDraft] = useState<7 | 3 | 1>(7);
   const [bearerToken, setBearerToken] = useState("");
+  const [costCapStatus, setCostCapStatus] = useState<CostCapStatus | null>(null);
+  const [costCapAudit, setCostCapAudit] = useState<ReadonlyArray<CostCapAuditEntry>>([]);
+
+  // Lane-3 cost-cap UX wave 2 — Spend subtab.
+  // Tier-gated: only rendered for small-co tier (the $200/mo SIEM-export
+  // surface). Status drives whether the subtab even appears in the nav.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await fetchCostCapStatus();
+        if (!cancelled) setCostCapStatus(status);
+      } catch {
+        if (!cancelled) setCostCapStatus(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeSubtab !== "spend") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const entries = await fetchCostCapAudit();
+        if (!cancelled) setCostCapAudit(entries);
+      } catch {
+        if (!cancelled) setCostCapAudit([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSubtab]);
+
+  const monitorSubtabs = useMemo(() => {
+    const subtabs = [...BASE_MONITOR_SUBTABS];
+    if (costCapStatus?.config.tier === "small-co") {
+      subtabs.push({ id: "spend", label: "Spend" });
+    }
+    return subtabs;
+  }, [costCapStatus]);
+
+  const downloadAuditCsv = () => {
+    const header = "ts,event,sessionId,provider,estimatedUsd,actualUsd,capUsd,reason\n";
+    const rows = costCapAudit
+      .map(
+        (e) =>
+          `${e.ts},${e.event},${e.sessionId},${e.provider ?? ""},${e.estimatedUsd ?? ""},${e.actualUsd ?? ""},${e.capUsd ?? ""},${e.reason ?? ""}`,
+      )
+      .join("\n");
+    const blob = new Blob([header + rows], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cost-cap-audit.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     if (!monitorConfig) {
@@ -202,7 +270,7 @@ export const MonitorPrimaryView = ({ monitorRuntime }: MonitorPrimaryViewProps) 
             </nav>
 
             <nav className="monitor-subtabs" aria-label="Monitor subtabs">
-              {MONITOR_SUBTABS.map((subtab) => (
+              {monitorSubtabs.map((subtab) => (
                 <button
                   aria-current={activeSubtab === subtab.id ? "page" : undefined}
                   className="monitor-subtab"
@@ -253,7 +321,60 @@ export const MonitorPrimaryView = ({ monitorRuntime }: MonitorPrimaryViewProps) 
         )}
       </header>
 
-      {activeSubtab === "configure" ? (
+      {activeSubtab === "spend" ? (
+        <section className="monitor-spend" aria-label="Cost-cap spend audit">
+          <header className="monitor-panel-header">
+            <h3>Spend audit log</h3>
+            <ActionButton
+              aria-label="Export cost-cap audit CSV"
+              onClick={downloadAuditCsv}
+              size="dense"
+              variant="info"
+            >
+              Export CSV
+            </ActionButton>
+          </header>
+          {costCapStatus && (
+            <p className="monitor-spend-summary">
+              Today: {formatUsd(costCapStatus.usage.daySpentUsd)} /{" "}
+              {formatUsd(costCapStatus.config.perDayUsd)} (
+              {costCapStatus.config.tier} tier)
+            </p>
+          )}
+          {costCapAudit.length === 0 ? (
+            <p className="monitor-empty">No audit entries yet.</p>
+          ) : (
+            <table className="monitor-spend-table">
+              <thead>
+                <tr>
+                  <th scope="col">Time</th>
+                  <th scope="col">Event</th>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Estimated</th>
+                  <th scope="col">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {costCapAudit.map((entry, i) => (
+                  <tr key={`${entry.ts}-${i}`}>
+                    <td>{formatTimestamp(entry.ts)}</td>
+                    <td>{entry.event}</td>
+                    <td>{entry.provider ?? "—"}</td>
+                    <td>
+                      {entry.estimatedUsd !== undefined
+                        ? formatUsd(entry.estimatedUsd)
+                        : entry.actualUsd !== undefined
+                          ? formatUsd(entry.actualUsd)
+                          : "—"}
+                    </td>
+                    <td>{entry.reason ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ) : activeSubtab === "configure" ? (
         <section className="monitor-configure" aria-label="Monitor configuration">
           <section
             className="monitor-panel monitor-panel--configure"

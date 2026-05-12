@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 
 import type { ApiRouteHandler } from "./routeHelpers";
 import { writeJson, writeMethodNotAllowed } from "./routeHelpers";
+import { checkAuthorizedRequest } from "./security";
 
 // Read-only SQLite query layer for the AgentLightning-lite store.
 // The Python side (BriefingDeck) is the writer; we shell out to the
@@ -129,6 +130,15 @@ export const handleClaudeBrainRolloutsRoute: ApiRouteHandler = async ({
     writeMethodNotAllowed(response, corsOrigin);
     return true;
   }
+  // L3 audit r3 P0 (2026-05-12): gate read-only rollout listing behind
+  // the same C1 auth as the POST routes. Pre-fix this leaked the full
+  // BriefingDeck rollout corpus to any non-loopback caller when
+  // OCTOGENT_ALLOW_REMOTE_ACCESS=1 was set without an API key.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
+    return true;
+  }
 
   const limitParam = requestUrl.searchParams.get("limit");
   const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : 20;
@@ -174,6 +184,14 @@ export const handleClaudeBrainRolloutItemRoute: ApiRouteHandler = async ({
   }
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  // L3 audit r3 P0 (2026-05-12): gate BEFORE rollout_id decode/validation
+  // so an unauthenticated caller cannot probe rollout_id existence via
+  // the 400/404 differential.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
 
@@ -274,6 +292,12 @@ export const handleClaudeBrainRewardsRecentRoute: ApiRouteHandler = async ({
   }
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  // L3 audit r3 P0 (2026-05-12): see rollouts handler above.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
 

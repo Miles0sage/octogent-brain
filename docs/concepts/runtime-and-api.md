@@ -43,6 +43,9 @@ Terminal WebSockets do not own the PTY. They are clients attached to a PTY sessi
 - binds to `127.0.0.1` by default
 - enforces loopback `Host` and `Origin` checks by default
 - remote access must be enabled explicitly with `OCTOGENT_ALLOW_REMOTE_ACCESS=1`
+- when `OCTOGENT_API_KEY` is set, state-changing HTTP routes require `Authorization: Bearer <key>` or `X-Octogent-Token: <key>`
+- browser WebSockets cannot send custom auth headers, so the dashboard can present the key on WS URLs via `?octogent_token=<key>`
+- the safest remote operator flow is: set `OCTOGENT_API_KEY`, enable remote access deliberately, then open the UI with `?octogent_token=<key>` once so the browser can persist it locally
 
 ## Persistence model
 

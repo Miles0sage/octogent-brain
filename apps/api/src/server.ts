@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { createApiServer } from "./createApiServer";
+import { warnInsecureConfig } from "./createApiServer/security";
 
 const parsePort = (value: string | undefined, fallback: number) => {
   if (!value) {
@@ -44,6 +45,15 @@ const validateStartupEnv = () => {
       `OCTOGENT_WEB_DIST_DIR directory does not exist: ${process.env.OCTOGENT_WEB_DIST_DIR} — web UI will be unavailable.`,
     );
   }
+
+  // L3 audit r3 H3 (2026-05-12): centralized insecure-config warning.
+  // warnInsecureConfig() covers both:
+  //   - allowRemoteAccess=true + no API key (single-user dev VPS)
+  //   - non-loopback HOST bind + no API key (operator forgot to set the
+  //     escape hatch but still exposed 0.0.0.0 / a public iface)
+  // Both are non-fatal: we warn and continue so existing dev workflows
+  // are not broken, but the operator sees a one-line stderr nudge.
+  warnInsecureConfig(host, { allowRemoteAccess });
 };
 
 validateStartupEnv();

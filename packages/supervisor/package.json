@@ -1,6 +1,6 @@
 {
   "name": "@octogent/supervisor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Mechanical-supervision substrate for autonomous coding agents. Cross-CLI dispatcher + verdict-gate that catches rubber-stamp passes and forces re-iteration. Aider writes, Claude evaluates, your gate keeps both honest.",
   "license": "MIT",
   "type": "module",

@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 
 import type { ApiRouteHandler } from "./routeHelpers";
 import { writeJson, writeMethodNotAllowed } from "./routeHelpers";
+import { checkAuthorizedRequest } from "./security";
 
 // Claude-brain integration paths. Allow override via env var so the fork
 // works on hosts that don't follow the /root/claude-brain layout. Read at
@@ -130,6 +131,15 @@ export const handleClaudeBrainDaemonsRoute: ApiRouteHandler = async (
     writeMethodNotAllowed(response, corsOrigin);
     return true;
   }
+  // L3 audit r3 P0 (2026-05-12): gate behind the same C1 auth as the
+  // POST routes. Pre-fix this handler returned the full systemd daemon
+  // list to any non-loopback caller when OCTOGENT_ALLOW_REMOTE_ACCESS=1
+  // was set without an API key.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
+    return true;
+  }
   const daemons: DaemonStatus[] = [];
   for (const unit of TRACKED_DAEMONS) {
     try {
@@ -184,6 +194,12 @@ export const handleClaudeBrainDpoRecentRoute: ApiRouteHandler = async (
   }
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  // L3 audit r3 P0 (2026-05-12): see daemons handler above.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
   const daysParam = requestUrl.searchParams.get("days");
@@ -305,6 +321,12 @@ export const handleClaudeBrainMemoryRoute: ApiRouteHandler = async (
   }
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  // L3 audit r3 P0 (2026-05-12): see daemons handler above.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
 
@@ -561,6 +583,12 @@ export const handleClaudeBrainAgentTeamsRoute: ApiRouteHandler = async (
     writeMethodNotAllowed(response, corsOrigin);
     return true;
   }
+  // L3 audit r3 P0 (2026-05-12): see daemons handler above.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
+    return true;
+  }
 
   const teamsDir = join(claudeUserRoot(), "teams");
   const tasksDir = join(claudeUserRoot(), "tasks");
@@ -688,6 +716,12 @@ export const handleClaudeBrainReviewFixturesListRoute: ApiRouteHandler = async (
     writeMethodNotAllowed(response, corsOrigin);
     return true;
   }
+  // L3 audit r3 P0 (2026-05-12): see daemons handler above.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
+    return true;
+  }
   const fixtures = loadFixtureFiles();
   const root = fixturesRoot();
   const payload: {
@@ -718,6 +752,14 @@ export const handleClaudeBrainReviewFixtureItemRoute: ApiRouteHandler = async (
   if (!match) return false;
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  // L3 audit r3 P0 (2026-05-12): gate BEFORE the fixture lookup so an
+  // unauthenticated caller cannot probe fixture-name existence via the
+  // 401 vs 404 differential.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
   const name = match[1] ?? "";
@@ -766,6 +808,16 @@ export const handleClaudeBrainReviewGateRoute: ApiRouteHandler = async (
   }
   if (request.method !== "POST") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  // L3 audit r3 P0 (2026-05-12): especially load-bearing on POST — the
+  // route runs the verdict-gate against user-supplied content, which is
+  // the only state-changing CPU work in this file. Gate BEFORE reading
+  // the body so a hostile remote client cannot exhaust JSON parsing
+  // budget pre-auth.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
   const bodyResult = await readJsonBodyOrWriteError(request, response, corsOrigin);

@@ -5,6 +5,10 @@ the current branch tip.
 
 Reproducer: `python3 docs/evidence/2026-05-12-real-tests.py --base-url http://127.0.0.1:8788`
 
+> Examples below were captured on the original author's box; replace
+> `<octogent-repo>` and any other placeholders with absolute paths from
+> your own deployment.
+
 ## Test 1 — `GET /api/claude-brain/drivers`
 
 ```json
@@ -52,7 +56,7 @@ gemini-cli      health={"healthy": false, "reason": "env-missing", "missing": ["
     "--",
     "--dangerously-skip-permissions This is the task body."
   ],
-  "cwd": "/root/octogent",
+  "cwd": "<octogent-repo>",
   "envFlags": []
 }
 ```
@@ -76,5 +80,5 @@ and `dryRun=false`. Cost is small but non-zero. To reproduce, run:
 ```bash
 curl -X POST http://localhost:8788/api/claude-brain/votes/dispatch \
   -H 'Content-Type: application/json' \
-  -d '{"taskInput":"Evaluate the statement 2+2=4. Reply with one final-line JSON object only: {\"verdict\":\"pass\"|\"fail\",\"improvements_exhausted\":false,\"issues\":[],\"scores\":{\"groundedness\":0.0-1.0,\"specificity\":0.0-1.0}}","providers":["claude-code"],"cwd":"/root/octogent"}'
+  -d '{"taskInput":"Evaluate the statement 2+2=4. Reply with one final-line JSON object only: {\"verdict\":\"pass\"|\"fail\",\"improvements_exhausted\":false,\"issues\":[],\"scores\":{\"groundedness\":0.0-1.0,\"specificity\":0.0-1.0}}","providers":["claude-code"],"cwd":"<octogent-repo>"}'
 ```

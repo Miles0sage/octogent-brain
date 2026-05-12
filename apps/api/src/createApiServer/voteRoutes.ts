@@ -14,21 +14,38 @@
 // parseReviewerVerdict to extract a ReviewerVerdict per voter, then tally.
 
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 
 import {
+  isCmaRubric,
   isTerminalAgentProvider,
   parseReviewerVerdict,
+  type CmaRubric,
   type RoutingConfig,
   type TerminalAgentProvider,
 } from "@octogent/core";
 import {
+  buildCmaPromptInjection,
+  cmaGradeToReviewerVerdict,
   DEFAULT_VOTE_CONFIG,
   dispatchTask,
   loadRoutingConfig,
+  parseCmaGradeFromText,
   tallyVotes,
   type VoterVerdict,
 } from "@octogent/supervisor";
 
+import {
+  checkCostCap,
+  estimateDispatchCost,
+  getDailySpend,
+  getSessionUsage,
+  loadCostCapConfig,
+  recordSpend,
+  redactAuditEntry,
+  type CostCapVerdict,
+  type CostEstimate,
+} from "../cost-cap";
 // L3 audit M3 (2026-05-12): apply the identical cwd allowlist policy
 // driverRoutes uses. Both endpoints accept a cwd field and both spawn
 // subprocesses there, so they share the same threat model.
@@ -42,6 +59,71 @@ import {
 import { checkAuthorizedRequest } from "./security";
 
 const VOTE_PATH = "/api/claude-brain/votes/dispatch";
+const COST_CAP_STATUS_PATH = "/api/claude-brain/cost-cap";
+const COST_CAP_AUDIT_PATH = "/api/claude-brain/cost-cap/audit";
+
+// Lane-3 audit log emission. The Spend subtab + SIEM exports both read
+// from the same JSONL stream. Path is OCTOGENT_AUDIT_LOG if set, else
+// /tmp/octogent-audit.jsonl. We also keep a small in-memory ring buffer
+// so the Spend subtab can render the last 100 entries without re-reading
+// the file every request.
+// L3 audit r3 H4 (2026-05-12): the audit entry shape now carries
+// optional taskInput/rubric fields. These are NEVER persisted in plain
+// text by default — `redactAuditEntry` (cost-cap.ts) replaces them with
+// `<redacted N chars>` placeholders. Operators on isolated hosts who
+// need the full payload for SOC2 evidence collection can opt in with
+// OCTOGENT_AUDIT_LOG_INCLUDE_PAYLOAD=1.
+type CostCapAuditEntry = {
+  ts: string;
+  event: "vote-dispatched" | "cap-fire" | "voter-completed";
+  sessionId: string;
+  providers?: ReadonlyArray<string>;
+  estimatedUsd?: number;
+  capUsd?: number;
+  reason?: string;
+  provider?: string;
+  actualUsd?: number;
+  // Redactable fields — see redactAuditEntry in cost-cap.ts.
+  taskInput?: string;
+  rubric?: unknown;
+};
+
+const AUDIT_RING_CAP = 100;
+const auditRing: CostCapAuditEntry[] = [];
+
+const emitAudit = (entry: CostCapAuditEntry): void => {
+  // L3 audit r3 H4 (2026-05-12): redact taskInput/rubric/prompt before
+  // both ring-buffer insertion and JSONL append. The Spend subtab + the
+  // SIEM file path see the same redacted view; redaction is a property
+  // of the emitter, not the consumer.
+  const redacted = redactAuditEntry(entry);
+  auditRing.push(redacted);
+  if (auditRing.length > AUDIT_RING_CAP) {
+    auditRing.splice(0, auditRing.length - AUDIT_RING_CAP);
+  }
+  const path = process.env.OCTOGENT_AUDIT_LOG ?? "/tmp/octogent-audit.jsonl";
+  try {
+    appendFileSync(path, JSON.stringify(redacted) + "\n");
+  } catch {
+    // Audit log write failure is non-fatal: the in-memory ring buffer
+    // still serves the Spend subtab. Errors here are intentionally
+    // suppressed so we never bring down a successful vote on a disk
+    // hiccup. SIEM operators monitor file timestamps separately.
+  }
+};
+
+// Resolve the sessionId used for cost-cap accounting. Body field wins
+// when present (the dashboard passes its own session id), else we
+// synthesize a per-IP key so anonymous calls still aggregate sensibly.
+const resolveSessionId = (
+  fields: Record<string, unknown>,
+  remoteAddress: string | undefined,
+): string => {
+  if (typeof fields.sessionId === "string" && fields.sessionId.length > 0) {
+    return fields.sessionId;
+  }
+  return `ip:${remoteAddress ?? "unknown"}`;
+};
 
 // L3 audit r2 H3 (2026-05-12): fan-out cap. Any single request that
 // fans out to more than this many voters spawns one subprocess per
@@ -141,6 +223,27 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
   }
   const dryRun = fields.dryRun === true;
 
+  // v0.2 wave 1b (2026-05-12): optional CMA rubric portability. When a
+  // rubric is supplied, validate its shape up-front (before any spawn or
+  // cost-cap math) so a bad payload returns 400 immediately. The order
+  // here matters: C1 auth + cwd allowlist have already fired above; we
+  // intentionally validate the rubric AFTER cheap auth/shape checks and
+  // BEFORE expensive cost-cap math + fan-out. Absent rubric =>
+  // backward-compatible (no behavior change, no breaking surface).
+  let rubric: CmaRubric | null = null;
+  if (fields.rubric !== undefined) {
+    if (!isCmaRubric(fields.rubric)) {
+      writeJson(
+        response,
+        400,
+        { ok: false, error: "invalid CMA rubric shape" },
+        corsOrigin,
+      );
+      return true;
+    }
+    rubric = fields.rubric;
+  }
+
   const loaded = loadRoutingConfig();
   if (!loaded.ok) {
     writeJson(
@@ -203,6 +306,51 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
     providers = selectDefaultProviders(config).slice(0, MAX_VOTERS);
   }
 
+  // Lane-3 cost-cap pre-flight gate. Estimate cost per provider, sum
+  // across the fan-out, and refuse the dispatch before spawning any
+  // subprocess if the per-dispatch/session/day cap would be exceeded.
+  // The session id is the request body's sessionId (when the dashboard
+  // passes one) or a per-IP key for anonymous calls.
+  const costCapConfig = loadCostCapConfig();
+  const sessionId = resolveSessionId(fields, request.socket.remoteAddress);
+  const sessionUsage = getSessionUsage(sessionId);
+  const estimates: CostEstimate[] = estimateDispatchCost(
+    providers,
+    (fields.taskInput as string).length,
+  );
+  const capVerdict: CostCapVerdict = checkCostCap(
+    estimates,
+    {
+      sessionSpentUsd: sessionUsage.sessionSpentUsd,
+      daySpentUsd: sessionUsage.daySpentUsd,
+    },
+    costCapConfig,
+  );
+  if (!capVerdict.ok) {
+    emitAudit({
+      ts: new Date().toISOString(),
+      event: "cap-fire",
+      sessionId,
+      providers,
+      estimatedUsd: estimates.reduce((a, e) => a + e.estimatedUsd, 0),
+      capUsd: capVerdict.capUsd,
+      reason: capVerdict.reason,
+      // L3 audit r3 H4 (2026-05-12): include taskInput/rubric in the
+      // audit entry. emitAudit redacts both fields by default; the
+      // OCTOGENT_AUDIT_LOG_INCLUDE_PAYLOAD=1 opt-in surfaces them in
+      // full for SOC2 evidence collection.
+      taskInput: fields.taskInput as string,
+      ...(rubric === null ? {} : { rubric }),
+    });
+    writeJson(
+      response,
+      402,
+      { ok: false, capError: capVerdict },
+      corsOrigin,
+    );
+    return true;
+  }
+
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
 
@@ -252,14 +400,41 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
           },
         ],
       };
+      // v0.2 wave 1b: when a CMA rubric is supplied, prepend the
+      // injection prompt to taskInput. The voter LLM is asked to grade
+      // against the rubric and emit a CmaGradeResult JSON tail. The
+      // original request payload is NOT mutated — only the dispatched
+      // taskInput. Absent rubric => unchanged invocation.
+      const voterTaskInput =
+        rubric === null
+          ? (fields.taskInput as string)
+          : `${buildCmaPromptInjection(rubric)}\n\n${fields.taskInput as string}`;
       const result = await dispatchTask(scopedConfig, {
         taskType,
-        taskInput: fields.taskInput as string,
+        taskInput: voterTaskInput,
         cwd,
         dryRun,
       });
       const stdoutText = aggregateStdout(result.events);
-      const parsed = parseReviewerVerdict(stdoutText);
+      // Two-stage verdict extraction when a rubric is in play:
+      //   1. parseCmaGradeFromText scans the stdout tail for a balanced
+      //      CmaGradeResult JSON. If found, adapt to ReviewerVerdict via
+      //      cmaGradeToReviewerVerdict (preserves passed/failed +
+      //      collapses per-criterion scores into groundedness/specificity).
+      //   2. If no grade is parseable, fall back to the existing
+      //      parseReviewerVerdict path. The voter is NOT failed — the
+      //      tallyVotes contract treats null verdicts as unparseable.
+      let parsed = null as ReturnType<typeof parseReviewerVerdict>;
+      if (rubric !== null) {
+        const grade = parseCmaGradeFromText(stdoutText);
+        if (grade !== null) {
+          parsed = cmaGradeToReviewerVerdict(grade, rubric);
+        } else {
+          parsed = parseReviewerVerdict(stdoutText);
+        }
+      } else {
+        parsed = parseReviewerVerdict(stdoutText);
+      }
       return {
         provider,
         dispatch_id: result.dispatch_id,
@@ -299,6 +474,37 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
   const outcome = tallyVotes(votes, DEFAULT_VOTE_CONFIG);
   const durationMs = Date.now() - startedAt;
 
+  // Record per-voter spend using the pre-flight estimate (we don't yet
+  // parse actual token counts from the dispatcher's event stream — that
+  // discount math is a future patch, see cost-cap-design.md "no prompt-
+  // cache discounting math" non-goal). Each voter contributes the
+  // estimate for its provider regardless of pass/fail; the cap accounts
+  // for cost incurred, not for outcome.
+  for (const p of perVoter) {
+    const est = estimates.find((e) => e.provider === p.provider);
+    if (est && est.estimatedUsd > 0) {
+      recordSpend(sessionId, est.estimatedUsd);
+      emitAudit({
+        ts: new Date().toISOString(),
+        event: "voter-completed",
+        sessionId,
+        provider: p.provider,
+        actualUsd: est.estimatedUsd,
+      });
+    }
+  }
+
+  emitAudit({
+    ts: new Date().toISOString(),
+    event: "vote-dispatched",
+    sessionId,
+    providers,
+    estimatedUsd: estimates.reduce((a, e) => a + e.estimatedUsd, 0),
+    // L3 audit r3 H4 (2026-05-12): see cap-fire path above.
+    taskInput: fields.taskInput as string,
+    ...(rubric === null ? {} : { rubric }),
+  });
+
   writeJson(
     response,
     200,
@@ -311,5 +517,66 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
     },
     corsOrigin,
   );
+  return true;
+};
+
+// GET /api/claude-brain/cost-cap — returns the active config + the
+// aggregated daily spend. The stat-tile + Spend subtab both call this.
+//
+// L3 audit r2 C1 (2026-05-12) parity: enforce the same auth gate as the
+// POST route. Status reveal is also subject to per-IP rate limiting so
+// it can't be used to brute-force scrape the spend state.
+export const handleCostCapStatusRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+) => {
+  if (requestUrl.pathname !== COST_CAP_STATUS_PATH) {
+    return false;
+  }
+  if (request.method !== "GET") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
+    return true;
+  }
+  const config = loadCostCapConfig();
+  const daily = getDailySpend();
+  writeJson(
+    response,
+    200,
+    {
+      config,
+      usage: {
+        daySpentUsd: daily.daySpentUsd,
+        dayStart: daily.dayStart,
+      },
+    },
+    corsOrigin,
+  );
+  return true;
+};
+
+// GET /api/claude-brain/cost-cap/audit — returns the last AUDIT_RING_CAP
+// audit entries from the in-memory ring. Drives the Spend subtab + CSV
+// export. Tier-gated by the dashboard (the route itself always answers,
+// the UI hides it for free tier).
+export const handleCostCapAuditRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+) => {
+  if (requestUrl.pathname !== COST_CAP_AUDIT_PATH) {
+    return false;
+  }
+  if (request.method !== "GET") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
+    return true;
+  }
+  writeJson(response, 200, { entries: auditRing.slice() }, corsOrigin);
   return true;
 };

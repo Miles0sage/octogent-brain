@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   buildClaudeUsageUrl,
@@ -25,8 +25,17 @@ import {
   buildWorkspaceSetupStepUrl,
   buildWorkspaceSetupUrl,
 } from "../src/runtime/runtimeEndpoints";
+import { resetRuntimeAuthForTests } from "../src/runtime/runtimeAuth";
 
 describe("runtimeEndpoints", () => {
+  beforeEach(() => {
+    resetRuntimeAuthForTests();
+  });
+
+  afterEach(() => {
+    resetRuntimeAuthForTests();
+  });
+
   it("returns same-origin API path when runtime base URL is not configured", () => {
     expect(buildTerminalSnapshotsUrl()).toBe("/api/terminal-snapshots");
   });
@@ -220,6 +229,17 @@ describe("runtimeEndpoints", () => {
     ).toBe("ws://127.0.0.1:8787/api/terminals/tentacle-main/ws");
   });
 
+  it("appends the runtime auth token to terminal websocket URLs", () => {
+    window.localStorage.setItem("octogent.apiToken", "secret-token");
+    expect(
+      buildTerminalSocketUrl(
+        "tentacle-main",
+        "http://127.0.0.1:8787",
+        new URL("https://workspace.example.com/dashboard") as unknown as Location,
+      ),
+    ).toBe("ws://127.0.0.1:8787/api/terminals/tentacle-main/ws?octogent_token=secret-token");
+  });
+
   it("builds same-origin terminal events websocket URL by default", () => {
     expect(
       buildTerminalEventsSocketUrl(
@@ -236,5 +256,15 @@ describe("runtimeEndpoints", () => {
         new URL("https://workspace.example.com/dashboard") as unknown as Location,
       ),
     ).toBe("ws://127.0.0.1:8787/api/terminal-events/ws");
+  });
+
+  it("appends the runtime auth token to terminal events websocket URLs", () => {
+    window.localStorage.setItem("octogent.apiToken", "secret-token");
+    expect(
+      buildTerminalEventsSocketUrl(
+        "http://127.0.0.1:8787",
+        new URL("https://workspace.example.com/dashboard") as unknown as Location,
+      ),
+    ).toBe("ws://127.0.0.1:8787/api/terminal-events/ws?octogent_token=secret-token");
   });
 });

@@ -655,13 +655,17 @@ describe("checkProviderHealth", () => {
     }
   });
 
-  it("reports transport-unsupported when probing pty transport", async () => {
-    // codex still uses pty transport in DEFAULT_ROUTING_CONFIG; the
-    // dispatcher's checkProviderHealth only handles stdio today.
+  it("codex driver health probe returns ready (or env/binary-missing) after stdio wiring", async () => {
+    // 2026-05-12: codex was migrated pty -> stdio via `codex exec`. The
+    // dispatcher's checkProviderHealth now passes the transport gate; only
+    // env-missing / binary-missing remain as possible non-ready states
+    // depending on the host. transport-unsupported MUST NOT be returned.
     const result = await checkProviderHealth("codex", DEFAULT_ROUTING_CONFIG);
-    expect(result.healthy).toBe(false);
     if (!result.healthy) {
-      expect(result.reason).toBe("transport-unsupported");
+      expect(result.reason).not.toBe("transport-unsupported");
+      expect(["env-missing", "binary-missing"]).toContain(result.reason);
+    } else {
+      expect(result.healthy).toBe(true);
     }
   });
 

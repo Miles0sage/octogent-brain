@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { GITHUB_SPARKLINE_HEIGHT, GITHUB_SPARKLINE_WIDTH } from "../app/constants";
 import type { UsageChartData } from "../app/hooks/useUsageHeatmapPolling";
 import type { ClaudeUsageSnapshot } from "../app/types";
+import { CostCapTile } from "./CostCapTile";
 import { OctopusGlyph } from "./EmptyOctopus";
 
 type RuntimeStatusStripProps = {
@@ -235,6 +236,7 @@ export const RuntimeStatusStrip = ({
           )}
         </div>
       </div>
+      <CostCapTile />
       <div className="console-status-claude-usage" aria-label="Claude usage limits">
         {onRefreshClaudeUsage && (
           <button

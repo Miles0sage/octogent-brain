@@ -268,12 +268,19 @@ const _defaultRoutingConfig: RoutingConfig = {
       // ANTHROPIC_API_KEY env var is required only with --bare.
       requiredEnv: [],
     },
+    // Wired 2026-05-12 — codex 0.130.0+ ships `codex exec` non-interactive
+    // subcommand. Was `pty` (deferred, health-failed: transport-
+    // unsupported) prior to this date. The baseArgs configure codex as a
+    // clean-stdout, read-only evaluator: `--color never` strips ANSI so
+    // stdout is parseable; `--skip-git-repo-check` lets it run outside a
+    // git repo (test envs, /tmp cwds); `-s read-only` sandboxes fs access
+    // so the voter cannot mutate the workspace it's evaluating.
     {
       provider: "codex",
-      transport: "pty",
+      transport: "stdio",
       capabilities: ["writer", "evaluator"],
       command: "codex",
-      baseArgs: [],
+      baseArgs: ["exec", "--color", "never", "--skip-git-repo-check", "-s", "read-only"],
       requiredEnv: ["OPENAI_API_KEY"],
     },
     {
