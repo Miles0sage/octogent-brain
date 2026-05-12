@@ -7,7 +7,7 @@ in this repository are documented here. This project adheres to
 
 ## [Unreleased]
 
-## [0.2.0] - TBD
+## [0.2.0] - 2026-05-12
 
 ### Added (wave 1 — types only, no api wiring yet)
 

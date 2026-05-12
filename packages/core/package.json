@@ -1,6 +1,6 @@
 {
   "name": "@octogent/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-agnostic domain types + verdict-gate + review-fix-loop for the @octogent/supervisor substrate. Pure-TS, no I/O.",
   "license": "MIT",
   "type": "module",
