@@ -172,6 +172,30 @@ Startup fails if neither `claude` nor another supported provider binary is insta
 
 PTY sessions survive browser reloads during the idle grace period, but they do **not** survive an API restart. Octogent marks previously running terminal records as `stale` on startup when it cannot reattach them to a live PTY session; use `octogent terminal list`, `stop`, `kill`, and `prune` to inspect and clean them up. Octogent caps live PTY sessions at 32 by default to protect the host; set `OCTOGENT_MAX_TERMINAL_SESSIONS` to a positive integer to tune that limit for larger orchestration runs.
 
+## Release
+
+Releases of the `@octogent/core` and `@octogent/supervisor` packages on npm are
+tag-driven. To cut a release: bump the `version` field in both
+`packages/core/package.json` and `packages/supervisor/package.json` to the same
+new semver (e.g. `0.2.0`), commit the bump, then run
+`git tag v0.2.0 && git push --tags`. The
+[`npm publish` workflow](.github/workflows/npm-publish.yml) detects the tag,
+validates that it matches both `package.json` versions, runs the full test
+suite, and publishes both packages — `@octogent/core` first, `@octogent/supervisor`
+second, so the supervisor's `workspace:*` dependency resolves to a registry
+version that already exists. Tags must match `v[0-9]+.[0-9]+.[0-9]+` (no
+pre-release suffixes for the `v0.1` line). Publishing requires the `NPM_TOKEN`
+repo secret; without it the workflow hard-fails before touching the registry.
+
+If a release goes out broken, the fastest rollback is `npm unpublish
+@octogent/core@<version>` and `npm unpublish @octogent/supervisor@<version>`
+within 72 hours of publish — npm permits unpublish inside that window. After
+72 hours, unpublish is no longer allowed, so the recovery path is to bump the
+patch version (e.g. `0.2.1`), fix the issue, and re-tag. Never reuse a
+published version number; the workflow's pre-publish probe
+(`pnpm view @octogent/<pkg>@<version>`) will refuse to overwrite an existing
+release.
+
 ## Docs
 
 - [Docs Home](docs/index.md)
