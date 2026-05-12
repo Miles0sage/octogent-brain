@@ -1,20 +1,24 @@
-import Database from "better-sqlite3";
+import { createClient, type Client } from "@libsql/client";
 import { readFileSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
-export function openDb(): Database.Database {
+export type Db = Client;
+
+export function openDb(): Db {
   const path = process.env.ARGUED_DB_PATH ?? "./db/argued.sqlite";
-  const db = new Database(path);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  return db;
+  const url = path === ":memory:" ? "file::memory:?cache=shared" : `file:${path}`;
+  return createClient({ url });
 }
 
-export function migrate(db: Database.Database): void {
-  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "db", "migrations");
+export async function migrate(db: Db): Promise<void> {
+  await db.execute("PRAGMA journal_mode = WAL");
+  await db.execute("PRAGMA foreign_keys = ON");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const dir = join(here, "..", "db", "migrations");
   const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
   for (const f of files) {
-    db.exec(readFileSync(join(dir, f), "utf8"));
+    const sql = readFileSync(join(dir, f), "utf8");
+    await db.executeMultiple(sql);
   }
 }
