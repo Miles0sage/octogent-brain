@@ -3,7 +3,7 @@ import { openDb, migrate } from "./db";
 import { handleArguePost } from "./routes/argue.post";
 
 const db = openDb();
-await migrate(db);
+migrate(db);
 
 const server = serve({
   port: Number(process.env.PORT ?? 3001),

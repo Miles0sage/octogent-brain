@@ -4,10 +4,10 @@ import { openDb, migrate, type Db } from "../src/db";
 
 describe("POST /argue", () => {
   let db: Db;
-  beforeEach(async () => {
+  beforeEach(() => {
     process.env.ARGUED_DB_PATH = ":memory:";
     db = openDb();
-    await migrate(db);
+    migrate(db);
   });
 
   it("rejects non-github URLs with 400", async () => {
@@ -31,8 +31,8 @@ describe("POST /argue", () => {
     const body = await res.json() as { id: string; status: string };
     expect(body.id).toMatch(/^[a-z0-9]{12}$/);
     expect(body.status).toBe("queued");
-    const result = await db.execute({ sql: "SELECT * FROM arguments WHERE id = ?", args: [body.id] });
-    expect(result.rows.length).toBe(1);
+    const row = db.query("SELECT * FROM arguments WHERE id = ?").get(body.id);
+    expect(row).toBeTruthy();
   });
 
   it("rejects non-PR github URL with 400", async () => {

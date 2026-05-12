@@ -1,5 +1,5 @@
 import type { Db } from "../db";
-import { z } from "zod";
+import * as z from "zod";
 import { customAlphabet } from "nanoid";
 import { fetchPR } from "@octogent/pr-fetcher";
 
@@ -28,11 +28,10 @@ export async function handleArguePost(
   const payload = opts.skipFetch
     ? { url, sha: "deadbeef", title: "(skipped)", description: "", diff: "", ciStatus: "none" as const }
     : await fetchPR(url);
-  await db.execute({
-    sql: `INSERT INTO arguments (id, pr_url, pr_sha, diff_truncated, pr_title, pr_description, ci_status, status, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', unixepoch())`,
-    args: [id, payload.url, payload.sha, payload.diff, payload.title, payload.description, payload.ciStatus],
-  });
+  db.query(`
+    INSERT INTO arguments (id, pr_url, pr_sha, diff_truncated, pr_title, pr_description, ci_status, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', unixepoch())
+  `).run(id, payload.url, payload.sha, payload.diff, payload.title, payload.description, payload.ciStatus);
   return new Response(JSON.stringify({ id, status: "queued" }), {
     status: 202,
     headers: { "content-type": "application/json" }
