@@ -60,6 +60,25 @@ This repo is a personal exploration of what an AI coding environment might look 
 - **Keeps agent-facing context in files** so the system is more durable than a single prompt thread
 - **Provides a local API and UI** for terminal lifecycle, persistence, websocket transport, and orchestration
 
+### Cost caps + audit log (v0.2)
+
+- **3-layer cost cap** — per-dispatch / per-session / per-day, configurable
+  via `OCTOGENT_PER_DISPATCH_USD`, `OCTOGENT_PER_SESSION_USD`,
+  `OCTOGENT_PER_DAY_USD`. The cross-vendor vote route refuses to spawn any
+  subprocess when the layered cap would trip (HTTP 402 + structured
+  `capError` body).
+- **Stat-tile** — left of the Claude usage rail. `$X.XX / $YY.YY` + a
+  10-segment bar. Slate < 50%, amber 50-90%, red+pulse 90-100%.
+- **Pre-flight pill** — next to the "Run cross-vendor vote" button. Estimated
+  cost + voter count before commitment; flips to "Would exceed daily cap"
+  when the per-day ceiling is in reach.
+- **Spend subtab** — tier-gated (`OCTOGENT_TIER=small-co`). Tails the
+  in-memory audit ring + exports CSV for SIEM ingestion. JSONL on disk at
+  `OCTOGENT_AUDIT_LOG` (default `/tmp/octogent-audit.jsonl`).
+
+See [`docs/concepts/cost-cap.md`](./docs/concepts/cost-cap.md) for the full
+contract.
+
 A **tentacle** is a folder under `.octogent/tentacles/<tentacle-id>/` that holds agent-readable markdown such as `CONTEXT.md`, `todo.md`, and any extra notes needed for that slice of the codebase.
 
 The octopus metaphor is literal: *one octopus, many tentacles, different work happening at the same time*.

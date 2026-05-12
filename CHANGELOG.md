@@ -35,6 +35,40 @@ in this repository are documented here. This project adheres to
   `NPM_TOKEN` is configured and wave 1b ships the `voteRoutes.ts`
   rubric-injection plumbing.
 
+### Added (wave 2 — cost-cap UX + audit log, Lane-3 design)
+
+- **3-layer cost-cap engine** (`apps/api/src/cost-cap.ts`). Per-dispatch,
+  per-session, and per-day USD ceilings with first-trip wins ordering.
+  `loadCostCapConfig()` reads `OCTOGENT_PER_DISPATCH_USD` /
+  `OCTOGENT_PER_SESSION_USD` / `OCTOGENT_PER_DAY_USD` (defaults 0.50 /
+  5.00 / 20.00). `OCTOGENT_TIER` (default `free`) gates the Spend subtab.
+  Public 2026-05 prices baked in as `DEFAULT_PROVIDER_RATES`:
+  claude-sonnet-4 $3/$15, gpt-5-codex-mini $0.25/$2, gemini-2.5-pro
+  $1.25/$10, aider local $0.
+- **Pre-flight refusal gate** in `voteRoutes.ts`. The `POST
+  /api/claude-brain/votes/dispatch` route estimates cost-per-provider
+  + sums across the fan-out + refuses with HTTP 402 +
+  `{ ok: false, capError }` when any cap would trip — before any
+  subprocess spawn. `recordSpend()` fires per voter after the dispatcher
+  resolves; daily totals reset at 00:00 UTC.
+- **Audit log + status endpoints.** `GET /api/claude-brain/cost-cap`
+  returns `{ config, usage }`. `GET /api/claude-brain/cost-cap/audit`
+  returns the last 100 in-memory entries. Same writes also append to
+  `OCTOGENT_AUDIT_LOG` (default `/tmp/octogent-audit.jsonl`) for
+  SIEM ingestion. Events: `vote-dispatched`, `cap-fire`,
+  `voter-completed`.
+- **Dashboard surface.** `CostCapTile` sits to the left of the Claude
+  usage rail (slate / amber / red+pulse bar states). `PreflightCostPill`
+  renders next to the Run cross-vendor vote button with cost + voter
+  count + daily-cap guard. The vote card flips
+  `data-cap-fire="true"` when a 402 comes back, giving a persistent
+  bar-color shift that reads correctly in screenshots/gifs. The
+  Monitor view adds a tier-gated **Spend** subtab tailing the audit
+  ring + CSV export.
+- **Docs.** `docs/concepts/cost-cap.md` documents the 3-layer contract,
+  tier matrix, env vars, audit-log shape, and UX surfaces. Cross-linked
+  from the README's new "Cost caps + audit log (v0.2)" subsection.
+
 ### Deferred to v0.2.x
 
 - **Voter-route rubric injection (wave 1b).** `apps/api`'s
@@ -44,9 +78,12 @@ in this repository are documented here. This project adheres to
   `parseCmaGradeFromText` + `cmaGradeToReviewerVerdict` before
   `tallyVotes`. Backward-compatible — absent rubric falls back to the
   current free-form `ReviewerVerdict` tail.
-- **Cost-cap enforcement.** Per-run and per-vote budget caps that hard-stop the
-  dispatcher when a cumulative dollar-spend threshold is crossed. Design spec
-  at [`docs/superpowers/specs/2026-05-12-cost-cap-design.md`](docs/superpowers/specs/2026-05-12-cost-cap-design.md).
+- **Driver-level cost-cap.** The wave-2 layer enforces caps at the
+  `voteRoutes` boundary. The deeper per-driver SIGTERM enforcement
+  described in
+  [`docs/superpowers/specs/2026-05-12-cost-cap-design.md`](docs/superpowers/specs/2026-05-12-cost-cap-design.md)
+  is still deferred — those plumb caps into the dispatcher subprocess
+  lifecycle.
 
 ## [0.1.0] - 2026-05-12
 

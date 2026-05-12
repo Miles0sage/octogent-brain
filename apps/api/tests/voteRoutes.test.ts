@@ -479,3 +479,180 @@ describe("voteRoutes C1: bearer-token auth + per-IP rate limit", () => {
 type _ConfigRef = RoutingConfig;
 void ({} as _ConfigRef);
 void DEFAULT_ROUTING_CONFIG;
+
+// Lane-3 cost-cap UX wave 2 — pre-flight cap refusal, audit log emission,
+// /cost-cap status route. Tests cover the 4 contract points in the spec:
+//   - 402 (Payment Required) when per-dispatch cap would be exceeded
+//   - recordSpend called after a voter completes (visible via /cost-cap)
+//   - cap-fire audit-log line written when blocked
+//   - GET /cost-cap returns { config, usage }
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+describe("voteRoutes cost-cap — pre-flight enforcement + audit log", () => {
+  let prevDispatchEnv: string | undefined;
+  let prevAuditEnv: string | undefined;
+  let prevAllowRemote: string | undefined;
+  let tmpDir: string;
+  let auditPath: string;
+
+  beforeEach(async () => {
+    prevDispatchEnv = process.env.OCTOGENT_PER_DISPATCH_USD;
+    prevAuditEnv = process.env.OCTOGENT_AUDIT_LOG;
+    prevAllowRemote = process.env.OCTOGENT_ALLOW_REMOTE_ACCESS;
+    delete process.env.OCTOGENT_ALLOW_REMOTE_ACCESS;
+    tmpDir = mkdtempSync(join(tmpdir(), "octogent-cap-"));
+    auditPath = join(tmpDir, "audit.jsonl");
+    process.env.OCTOGENT_AUDIT_LOG = auditPath;
+    const { resetCostCapState } = await import("../src/cost-cap");
+    resetCostCapState();
+    const { resetAuthState } = await import("../src/createApiServer/security");
+    resetAuthState();
+  });
+
+  afterEach(async () => {
+    if (prevDispatchEnv === undefined) delete process.env.OCTOGENT_PER_DISPATCH_USD;
+    else process.env.OCTOGENT_PER_DISPATCH_USD = prevDispatchEnv;
+    if (prevAuditEnv === undefined) delete process.env.OCTOGENT_AUDIT_LOG;
+    else process.env.OCTOGENT_AUDIT_LOG = prevAuditEnv;
+    if (prevAllowRemote === undefined) delete process.env.OCTOGENT_ALLOW_REMOTE_ACCESS;
+    else process.env.OCTOGENT_ALLOW_REMOTE_ACCESS = prevAllowRemote;
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore cleanup races */
+    }
+    const { resetCostCapState } = await import("../src/cost-cap");
+    resetCostCapState();
+  });
+
+  it("blocks dispatch with HTTP 402 when per-dispatch cap would be exceeded", async () => {
+    // Tighten the per-dispatch cap so even a single dryRun voter would
+    // exceed it. The estimate for claude-code at the spec input is well
+    // above $0.000001 — that floor guarantees the cap fires.
+    process.env.OCTOGENT_PER_DISPATCH_USD = "0.000001";
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: ["claude-code"],
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(402);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      ok: false;
+      capError: { reason: string; capUsd: number };
+    };
+    expect(body.ok).toBe(false);
+    expect(body.capError.reason).toBe("would-exceed-per-dispatch");
+  });
+
+  it("emits a cap-fire audit log entry when blocked", async () => {
+    process.env.OCTOGENT_PER_DISPATCH_USD = "0.000001";
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: ["claude-code"],
+      dryRun: true,
+    });
+    await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    const audit = readFileSync(auditPath, "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { event: string; reason?: string });
+    const capFire = audit.find((e) => e.event === "cap-fire");
+    expect(capFire).toBeDefined();
+    expect(capFire?.reason).toBe("would-exceed-per-dispatch");
+  });
+
+  it("records spend after each voter completes (visible via /cost-cap)", async () => {
+    // Default $0.50 per-dispatch is plenty; a single dryRun voter
+    // succeeds and recordSpend should fire from the route.
+    const dispatchCtx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: ["claude-code"],
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(dispatchCtx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(dispatchCtx.responseStub.status).toBe(200);
+
+    // /api/claude-brain/cost-cap returns aggregated daily totals.
+    const { handleCostCapStatusRoute } = await import(
+      "../src/createApiServer/voteRoutes"
+    );
+    const statusCtx = buildGet("http://x.test/api/claude-brain/cost-cap");
+    // Convert the GET to the GET path (replace method).
+    (statusCtx.request as unknown as { method: string }).method = "GET";
+    (statusCtx.request as unknown as { socket: { remoteAddress: string } }).socket = {
+      remoteAddress: "127.0.0.1",
+    };
+    (statusCtx.request as unknown as { headers: Record<string, string> }).headers = {};
+    const ok = await handleCostCapStatusRoute(statusCtx, buildRouteDeps());
+    expect(ok).toBe(true);
+    expect(statusCtx.responseStub.status).toBe(200);
+    const status = JSON.parse(statusCtx.responseStub.body) as {
+      config: { perDispatchUsd: number; tier: string };
+      usage: { daySpentUsd: number };
+    };
+    expect(status.usage.daySpentUsd).toBeGreaterThan(0);
+    expect(status.config.tier).toBe("free");
+  });
+
+  it("/api/claude-brain/cost-cap returns config + usage even with no spend", async () => {
+    const { handleCostCapStatusRoute } = await import(
+      "../src/createApiServer/voteRoutes"
+    );
+    const ctx = buildGet("http://x.test/api/claude-brain/cost-cap");
+    (ctx.request as unknown as { method: string }).method = "GET";
+    (ctx.request as unknown as { socket: { remoteAddress: string } }).socket = {
+      remoteAddress: "127.0.0.1",
+    };
+    (ctx.request as unknown as { headers: Record<string, string> }).headers = {};
+    const handled = await handleCostCapStatusRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+    const status = JSON.parse(ctx.responseStub.body) as {
+      config: { perDispatchUsd: number; perSessionUsd: number; perDayUsd: number; tier: string };
+      usage: { daySpentUsd: number };
+    };
+    expect(status.config.perDispatchUsd).toBe(0.5);
+    expect(status.config.perSessionUsd).toBe(5);
+    expect(status.config.perDayUsd).toBe(20);
+    expect(status.usage.daySpentUsd).toBe(0);
+  });
+
+  it("GET /api/claude-brain/cost-cap/audit returns recent audit entries", async () => {
+    // Drive one successful dispatch to populate audit log.
+    const dispatchCtx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: ["claude-code"],
+      dryRun: true,
+    });
+    await handleVoteDispatchRoute(dispatchCtx, buildRouteDeps());
+
+    const { handleCostCapAuditRoute } = await import(
+      "../src/createApiServer/voteRoutes"
+    );
+    const auditCtx = buildGet("http://x.test/api/claude-brain/cost-cap/audit");
+    (auditCtx.request as unknown as { method: string }).method = "GET";
+    (auditCtx.request as unknown as { socket: { remoteAddress: string } }).socket = {
+      remoteAddress: "127.0.0.1",
+    };
+    (auditCtx.request as unknown as { headers: Record<string, string> }).headers = {};
+    const handled = await handleCostCapAuditRoute(auditCtx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(auditCtx.responseStub.status).toBe(200);
+    const body = JSON.parse(auditCtx.responseStub.body) as {
+      entries: Array<{ event: string }>;
+    };
+    expect(Array.isArray(body.entries)).toBe(true);
+    expect(body.entries.length).toBeGreaterThan(0);
+    // Should contain at least one vote-dispatched event.
+    expect(body.entries.some((e) => e.event === "vote-dispatched")).toBe(true);
+  });
+});

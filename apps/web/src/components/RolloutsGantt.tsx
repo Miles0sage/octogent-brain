@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import {
+  fetchCostCapStatus,
+  formatUsd,
+  type CostCapStatus,
+} from "../lib/cost-cap-client";
+import { PreflightCostPill } from "./PreflightCostPill";
+
 // Vote-outcome demo types. Mirrors the JSON shape returned by
 // `POST /api/claude-brain/votes/dispatch` (see apps/api/src/createApiServer/voteRoutes.ts)
 // and the underlying VoterVerdict / VoteOutcome primitives in
@@ -42,6 +49,17 @@ interface VoteDispatchResponse {
 const VOTE_DEMO_DEFAULT_TASK =
   "Reviewer task: verify the most recent change passes groundedness+specificity gates.";
 
+// Lane-3 cost-cap UX wave 2 — 402 means the cap-fire engaged. Surface
+// the structured capError so the UI can paint the bar-color shift +
+// the pulse on the stat-tile.
+class CostCapError extends Error {
+  capError: { reason: string; capUsd: number; remainingUsd: number };
+  constructor(capError: { reason: string; capUsd: number; remainingUsd: number }) {
+    super(`cost-cap: ${capError.reason}`);
+    this.capError = capError;
+  }
+}
+
 const dispatchVote = async (params: {
   taskInput: string;
   dryRun: boolean;
@@ -55,6 +73,13 @@ const dispatchVote = async (params: {
       dryRun: params.dryRun,
     }),
   });
+  if (response.status === 402) {
+    const body = (await response.json()) as {
+      ok: false;
+      capError: { reason: string; capUsd: number; remainingUsd: number };
+    };
+    throw new CostCapError(body.capError);
+  }
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
@@ -243,10 +268,28 @@ export const RolloutsGantt = () => {
   const [voteResult, setVoteResult] = useState<VoteDispatchResponse | null>(null);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [isVoteRunning, setIsVoteRunning] = useState<boolean>(false);
+  const [capFire, setCapFire] = useState<{ reason: string; capUsd: number } | null>(null);
+  const [costCapStatus, setCostCapStatus] = useState<CostCapStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await fetchCostCapStatus();
+        if (!cancelled) setCostCapStatus(status);
+      } catch {
+        /* tile-unconfigured / transient: pill renders cap-agnostic */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [voteResult, capFire]);
 
   const runVote = useCallback(async () => {
     setIsVoteRunning(true);
     setVoteError(null);
+    setCapFire(null);
     try {
       const next = await dispatchVote({
         taskInput: voteTaskInput,
@@ -254,7 +297,12 @@ export const RolloutsGantt = () => {
       });
       setVoteResult(next);
     } catch (err) {
-      setVoteError(err instanceof Error ? err.message : String(err));
+      if (err instanceof CostCapError) {
+        setCapFire({ reason: err.capError.reason, capUsd: err.capError.capUsd });
+        setVoteError(`Cost cap engaged: ${err.capError.reason}`);
+      } else {
+        setVoteError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setIsVoteRunning(false);
     }
@@ -534,6 +582,8 @@ export const RolloutsGantt = () => {
           onRun={runVote}
           result={voteResult}
           error={voteError}
+          capFire={capFire}
+          costCapStatus={costCapStatus}
         />
       </section>
     </section>
@@ -549,7 +599,19 @@ interface VoteDemoSectionProps {
   onRun: () => void;
   result: VoteDispatchResponse | null;
   error: string | null;
+  capFire: { reason: string; capUsd: number } | null;
+  costCapStatus: CostCapStatus | null;
 }
+
+// Rough estimate for the pre-flight pill — mirrors the api's
+// estimateDispatchCost(promptChars/4 + 500 output tokens) but assumes
+// the default 2-evaluator pool (claude-code + codex). Keeps this side
+// cheap; the real cap-fire still uses the api estimator.
+const PILL_VOTERS: ReadonlyArray<string> = ["claude-code", "codex"];
+const PILL_USD_PER_CHAR_FALLBACK = 0.00002; // ~$0.02 / 1000 chars total
+
+const estimatePromptUsd = (taskInput: string): number =>
+  Math.max(0, taskInput.length) * PILL_USD_PER_CHAR_FALLBACK;
 
 const VoteDemoSection = ({
   taskInput,
@@ -560,11 +622,18 @@ const VoteDemoSection = ({
   onRun,
   result,
   error,
+  capFire,
+  costCapStatus,
 }: VoteDemoSectionProps) => {
+  const estimate = estimatePromptUsd(taskInput);
+  const remainingDailyUsd = costCapStatus
+    ? Math.max(0, costCapStatus.config.perDayUsd - costCapStatus.usage.daySpentUsd)
+    : null;
   return (
     <section
-      className="claude-brain-vote-demo"
+      className={`claude-brain-vote-demo${capFire ? " cap-fire-active" : ""}`}
       aria-label="Cross-vendor vote demo"
+      data-cap-fire={capFire ? "true" : "false"}
     >
       <header className="claude-brain-panel-header">
         <div>
@@ -575,17 +644,29 @@ const VoteDemoSection = ({
             ship this (cannibalizes Claude API revenue); we can.
           </p>
         </div>
-        <button
-          className="claude-brain-refresh"
-          type="button"
-          onClick={() => {
-            onRun();
-          }}
-          disabled={isRunning || taskInput.trim().length === 0}
-        >
-          {isRunning ? "Voting…" : "Run cross-vendor vote"}
-        </button>
+        <div className="claude-brain-vote-actions">
+          <PreflightCostPill
+            providers={PILL_VOTERS}
+            estimate={estimate}
+            remainingDailyUsd={remainingDailyUsd}
+          />
+          <button
+            className="claude-brain-refresh"
+            type="button"
+            onClick={() => {
+              onRun();
+            }}
+            disabled={isRunning || taskInput.trim().length === 0}
+          >
+            {isRunning ? "Voting…" : "Run cross-vendor vote"}
+          </button>
+        </div>
       </header>
+      {capFire && (
+        <div className="claude-brain-cap-fire" role="alert" aria-label="Cap-fire active">
+          Cap engaged: {capFire.reason} (cap {formatUsd(capFire.capUsd)})
+        </div>
+      )}
 
       <div className="claude-brain-vote-controls">
         <label className="claude-brain-vote-task-label">
