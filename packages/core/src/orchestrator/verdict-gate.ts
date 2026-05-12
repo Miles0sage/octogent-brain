@@ -42,7 +42,11 @@ const isStringArray = (v: unknown): v is string[] =>
 const isUnitInterval = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
 
-const narrowVerdict = (raw: unknown): ReviewerVerdict | null => {
+// Public narrowing helper. Returns a typed ReviewerVerdict if `raw` is
+// a valid verdict shape, else null. Exposed so the supervisor's bounded
+// extractor can reuse the exact same shape contract without copying
+// the field-by-field structural checks. (L3 audit r2 H2, 2026-05-12.)
+export const narrowReviewerVerdict = (raw: unknown): ReviewerVerdict | null => {
   if (!isPlainObject(raw)) return null;
   const { verdict, improvements_exhausted, issues, scores } = raw;
   if (verdict !== "pass" && verdict !== "fail") return null;
@@ -112,10 +116,34 @@ export const parseReviewerVerdict = (raw: string): ReviewerVerdict | null => {
     } catch {
       continue;
     }
-    const narrowed = narrowVerdict(parsed);
+    const narrowed = narrowReviewerVerdict(parsed);
     if (narrowed) return narrowed;
   }
   return null;
+};
+
+// Multi-candidate sibling of parseReviewerVerdict. Returns every JSON
+// candidate that successfully narrows to a ReviewerVerdict, in document
+// order. Required by callers that need to act on each verdict in the
+// stream (e.g. supervisor's verdict-watcher multi-verdict-per-chunk
+// path) without re-implementing the JSON walker locally. Malformed and
+// non-verdict candidates are silently skipped — only successfully
+// narrowed verdicts make it into the output. No dedup: caller decides.
+// Added 2026-05-12 (L3 audit r2).
+export const parseAllReviewerVerdicts = (raw: string): ReviewerVerdict[] => {
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  const out: ReviewerVerdict[] = [];
+  for (const candidate of extractJsonObjects(raw)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const narrowed = narrowReviewerVerdict(parsed);
+    if (narrowed) out.push(narrowed);
+  }
+  return out;
 };
 
 export const evaluateVerdict = (

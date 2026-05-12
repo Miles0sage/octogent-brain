@@ -632,42 +632,49 @@ export const createSessionRuntime = ({
       // L3 audit M4: wrap the verdict-watcher path so an exception in
       // the gate logic (future schema drift, OOM, etc.) disables the
       // watcher rather than killing the entire PTY listener silently.
+      // L3 audit r2 (2026-05-12): migrated from observeChunk (one
+      // observation per call, with the rest queued) to observeChunkAll
+      // (every observation from a chunk in document order). Removes
+      // the one-chunk latency that previously affected a PTY chunk
+      // containing two verdicts (LLM self-correction + final verdict).
       if (session.verdictWatcher && session.autoVerdictLoop === true) {
         try {
-          const obs = session.verdictWatcher.observeChunk(chunk);
-          if (obs.kind === "verdict-blocked") {
-            broadcastMessage(session, {
-              type: "verdict-block",
-              iteration: obs.iteration,
-              gate_reason: obs.gate.reason,
-              scores: obs.verdict.scores,
-            });
-            appendDebugLog(
-              session,
-              `verdict-block session=${sessionId} iter=${obs.iteration} reason=${obs.gate.reason}`,
-            );
-            session.pty.write(
-              `${BRACKETED_PASTE_START}${obs.reinjectPrompt}${BRACKETED_PASTE_END}\r`,
-            );
-          } else if (obs.kind === "verdict-approved") {
-            broadcastMessage(session, {
-              type: "verdict-approved",
-              scores: obs.verdict.scores,
-            });
-            appendDebugLog(
-              session,
-              `verdict-approved session=${sessionId} g=${obs.verdict.scores.groundedness} s=${obs.verdict.scores.specificity}`,
-            );
-          } else if (obs.kind === "loop-terminated") {
-            broadcastMessage(session, {
-              type: "verdict-loop-terminated",
-              reason: obs.reason,
-              iterations: obs.iterations.length,
-            });
-            appendDebugLog(
-              session,
-              `verdict-loop-terminated session=${sessionId} reason=${obs.reason} iters=${obs.iterations.length}`,
-            );
+          const observations = session.verdictWatcher.observeChunkAll(chunk);
+          for (const obs of observations) {
+            if (obs.kind === "verdict-blocked") {
+              broadcastMessage(session, {
+                type: "verdict-block",
+                iteration: obs.iteration,
+                gate_reason: obs.gate.reason,
+                scores: obs.verdict.scores,
+              });
+              appendDebugLog(
+                session,
+                `verdict-block session=${sessionId} iter=${obs.iteration} reason=${obs.gate.reason}`,
+              );
+              session.pty.write(
+                `${BRACKETED_PASTE_START}${obs.reinjectPrompt}${BRACKETED_PASTE_END}\r`,
+              );
+            } else if (obs.kind === "verdict-approved") {
+              broadcastMessage(session, {
+                type: "verdict-approved",
+                scores: obs.verdict.scores,
+              });
+              appendDebugLog(
+                session,
+                `verdict-approved session=${sessionId} g=${obs.verdict.scores.groundedness} s=${obs.verdict.scores.specificity}`,
+              );
+            } else if (obs.kind === "loop-terminated") {
+              broadcastMessage(session, {
+                type: "verdict-loop-terminated",
+                reason: obs.reason,
+                iterations: obs.iterations.length,
+              });
+              appendDebugLog(
+                session,
+                `verdict-loop-terminated session=${sessionId} reason=${obs.reason} iters=${obs.iterations.length}`,
+              );
+            }
           }
         } catch (err) {
           // Disable the watcher rather than nuke the session.
