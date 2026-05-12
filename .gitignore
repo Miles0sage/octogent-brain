@@ -12,3 +12,7 @@
 **/coverage/
 
 .octogent
+
+# L3 audit follow-up: tsbuildinfo files are TS incremental build
+# artifacts — they vary by working tree, never want them committed.
+**/*.tsbuildinfo
