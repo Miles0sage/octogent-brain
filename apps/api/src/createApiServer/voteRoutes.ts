@@ -75,6 +75,7 @@ const aggregateStdout = (
 
 export const handleVoteDispatchRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
+  { workspaceCwd },
 ) => {
   if (requestUrl.pathname !== VOTE_PATH) {
     return false;
@@ -100,10 +101,10 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
   }
 
   const taskType = isNonEmptyString(fields.taskType) ? fields.taskType : "verify";
-  const cwd = isNonEmptyString(fields.cwd) ? fields.cwd : process.cwd();
+  const cwd = isNonEmptyString(fields.cwd) ? fields.cwd : workspaceCwd;
   // L3 audit M3 (2026-05-12): same allowlist driverRoutes uses. Refuse
   // request-supplied cwds outside the workspace + tentacle worktrees.
-  if (!isCwdAllowed(cwd)) {
+  if (!isCwdAllowed(cwd, workspaceCwd)) {
     writeJson(
       response,
       400,

@@ -1,9 +1,9 @@
 # Live smoke tests — captured 2026-05-12T04:48:39.669536
 
-Run against http://localhost:8788 with the substrate at commit
-$(git -C /root/octogent rev-parse HEAD).
+Run against `http://localhost:8788` with the local `octogent` checkout at
+the current branch tip.
 
-Reproducer: `python3 /root/octogent/docs/evidence/2026-05-12-real-tests.py` (script below).
+Reproducer: `python3 docs/evidence/2026-05-12-real-tests.py --base-url http://127.0.0.1:8788`
 
 ## Test 1 — `GET /api/claude-brain/drivers`
 
@@ -52,7 +52,7 @@ gemini-cli      health={"healthy": false, "reason": "env-missing", "missing": ["
     "--",
     "--dangerously-skip-permissions This is the task body."
   ],
-  "cwd": "/root/briefingdeck",
+  "cwd": "/root/octogent",
   "envFlags": []
 }
 ```
@@ -68,13 +68,13 @@ HTTP 400: {"error":"cwd not within allowed workspace"}
 
 Test 3 (live `claude --print` through vote endpoint) is NOT reproducible from
 a fresh checkout without consuming Anthropic credits + an interactive Claude
-login on the host. The earlier in-session smoke (logged in conversation)
-returned `winner=pass, duration_ms=16890, scores={groundedness:1, specificity:0.95}`
-via `POST /api/claude-brain/votes/dispatch` with `providers=['claude-code']`
-and `dryRun=false`. Cost ~\$0.005. To reproduce, run:
+login on the host. In this session, the same endpoint returned `winner=pass`
+with a parseable JSON verdict from `claude-code` in about 13-15s via
+`POST /api/claude-brain/votes/dispatch` with `providers=['claude-code']`
+and `dryRun=false`. Cost is small but non-zero. To reproduce, run:
 
 ```bash
 curl -X POST http://localhost:8788/api/claude-brain/votes/dispatch \
   -H 'Content-Type: application/json' \
-  -d '{"taskInput":"Evaluate: 2+2=4. Emit final-line JSON.","providers":["claude-code"]}'
+  -d '{"taskInput":"Evaluate the statement 2+2=4. Reply with one final-line JSON object only: {\"verdict\":\"pass\"|\"fail\",\"improvements_exhausted\":false,\"issues\":[],\"scores\":{\"groundedness\":0.0-1.0,\"specificity\":0.0-1.0}}","providers":["claude-code"],"cwd":"/root/octogent"}'
 ```

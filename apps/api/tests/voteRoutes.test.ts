@@ -59,17 +59,19 @@ const buildPost = (url: string, body: unknown) => {
   };
 };
 
+const buildRouteDeps = (workspaceCwd = process.cwd()) => ({ workspaceCwd } as never);
+
 describe("voteRoutes — request validation", () => {
   it("returns 405 on GET", async () => {
     const ctx = buildGet("http://x.test/api/claude-brain/votes/dispatch");
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(405);
   });
 
   it("returns 400 on missing taskInput", async () => {
     const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {});
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
     const body = JSON.parse(ctx.responseStub.body) as { error: string };
@@ -78,7 +80,7 @@ describe("voteRoutes — request validation", () => {
 
   it("returns 400 when body is not a JSON object", async () => {
     const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", "not-an-object");
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -87,7 +89,7 @@ describe("voteRoutes — request validation", () => {
     const ctx = buildPost("http://x.test/api/claude-brain/other", {
       taskInput: "x",
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(false);
   });
 });
@@ -99,7 +101,7 @@ describe("voteRoutes — dryRun fan-out", () => {
       taskType: "verify",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
     const body = JSON.parse(ctx.responseStub.body) as {
@@ -132,7 +134,7 @@ describe("voteRoutes — dryRun fan-out", () => {
       taskType: "verify",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
     const body = JSON.parse(ctx.responseStub.body) as {
@@ -156,7 +158,7 @@ describe("voteRoutes — dryRun fan-out", () => {
       providers: ["claude-code"],
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
     const body = JSON.parse(ctx.responseStub.body) as {
@@ -173,7 +175,7 @@ describe("voteRoutes — outcome shape contract", () => {
       taskType: "verify",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     const body = JSON.parse(ctx.responseStub.body) as {
       outcome: {
@@ -198,7 +200,7 @@ describe("voteRoutes — outcome shape contract", () => {
       providers: ["claude-code", "codex"],
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     const body = JSON.parse(ctx.responseStub.body) as {
       dispatch_ids: string[];

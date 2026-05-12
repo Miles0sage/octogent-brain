@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import {
   loadRoutingConfig,
 } from "@octogent/supervisor";
 import {
+  TENTACLES_ROOT,
   handleDriversDispatchRoute,
   handleDriversListRoute,
 } from "../src/createApiServer/driverRoutes";
@@ -70,6 +71,8 @@ const buildPost = (url: string, body: unknown) => {
     corsOrigin: null,
   };
 };
+
+const buildRouteDeps = (workspaceCwd = process.cwd()) => ({ workspaceCwd } as never);
 
 describe("routingLoader", () => {
   let prevEnv: string | undefined;
@@ -326,7 +329,7 @@ describe("driverRoutes", () => {
 
   it("GET /drivers lists default config + health probes", async () => {
     const ctx = buildGet("http://x.test/api/claude-brain/drivers");
-    const handled = await handleDriversListRoute(ctx, {} as never);
+    const handled = await handleDriversListRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     const body = JSON.parse(ctx.responseStub.body) as {
       config_source: string;
@@ -346,7 +349,7 @@ describe("driverRoutes", () => {
     writeFileSync(configPath, "{ not valid");
     process.env.OCTOGENT_ROUTING_CONFIG = configPath;
     const ctx = buildGet("http://x.test/api/claude-brain/drivers");
-    const handled = await handleDriversListRoute(ctx, {} as never);
+    const handled = await handleDriversListRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     const body = JSON.parse(ctx.responseStub.body) as {
       config: null;
@@ -366,7 +369,7 @@ describe("driverRoutes", () => {
       cwd: process.cwd(),
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
     const body = JSON.parse(ctx.responseStub.body) as {
@@ -384,7 +387,7 @@ describe("driverRoutes", () => {
     const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
       taskInput: "foo",
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -393,14 +396,14 @@ describe("driverRoutes", () => {
     const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
       taskType: "refactor",
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
 
   it("GET /drivers returns 405 on POST", async () => {
     const ctx = buildPost("http://x.test/api/claude-brain/drivers", {});
-    const handled = await handleDriversListRoute(ctx, {} as never);
+    const handled = await handleDriversListRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(405);
   });
@@ -427,7 +430,7 @@ describe("driverRoutes M3: cwd allowlist", () => {
       cwd: "/etc/passwd",
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
     const body = JSON.parse(ctx.responseStub.body) as { error: string };
@@ -441,7 +444,7 @@ describe("driverRoutes M3: cwd allowlist", () => {
       cwd: "/root/.ssh",
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -453,7 +456,7 @@ describe("driverRoutes M3: cwd allowlist", () => {
       cwd: "/tmp",
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -466,7 +469,7 @@ describe("driverRoutes M3: cwd allowlist", () => {
       cwd,
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -478,39 +481,78 @@ describe("driverRoutes M3: cwd allowlist", () => {
       cwd: process.cwd(),
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
   });
 
   it("accepts cwd within ~/.octogent/tentacles/<id>/worktree", async () => {
-    // Use a path under the allowlisted prefix; the dispatcher won't
-    // actually chdir into it because dryRun=true short-circuits before
-    // spawn — so the directory doesn't need to exist for the 400 vs 200
-    // distinction to hold.
-    const cwd = `${homedir()}/.octogent/tentacles/octopus-1/worktree`;
+    mkdirSync(TENTACLES_ROOT, { recursive: true });
+    const tentacleRoot = mkdtempSync(join(TENTACLES_ROOT, "octopus-"));
+    const cwd = join(tentacleRoot, "worktree");
+    mkdirSync(cwd, { recursive: true });
+    try {
+      const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+        taskType: "refactor",
+        taskInput: "harmless input",
+        cwd,
+        dryRun: true,
+      });
+      const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
+      expect(handled).toBe(true);
+      expect(ctx.responseStub.status).toBe(200);
+    } finally {
+      rmSync(tentacleRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts cwd in subdirectory of a tentacle worktree", async () => {
+    mkdirSync(TENTACLES_ROOT, { recursive: true });
+    const tentacleRoot = mkdtempSync(join(TENTACLES_ROOT, "octopus-"));
+    const cwd = join(tentacleRoot, "worktree", "packages", "core");
+    mkdirSync(cwd, { recursive: true });
+    try {
+      const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+        taskType: "refactor",
+        taskInput: "harmless input",
+        cwd,
+        dryRun: true,
+      });
+      const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps());
+      expect(handled).toBe(true);
+      expect(ctx.responseStub.status).toBe(200);
+    } finally {
+      rmSync(tentacleRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts the configured workspaceCwd even when process.cwd() points somewhere else", async () => {
+    const workspaceCwd = "/root/octogent";
     const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
       taskType: "refactor",
       taskInput: "harmless input",
-      cwd,
+      cwd: workspaceCwd,
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps(workspaceCwd));
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
   });
 
-  it("accepts cwd in subdirectory of a tentacle worktree", async () => {
-    const cwd = `${homedir()}/.octogent/tentacles/octopus-1/worktree/packages/core`;
+  it("defaults missing cwd to the configured workspaceCwd", async () => {
+    const workspaceCwd = "/root/octogent";
     const ctx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
-      taskType: "refactor",
+      taskType: "verify",
       taskInput: "harmless input",
-      cwd,
       dryRun: true,
     });
-    const handled = await handleDriversDispatchRoute(ctx, {} as never);
+    const handled = await handleDriversDispatchRoute(ctx, buildRouteDeps(workspaceCwd));
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      invocation: { cwd: string } | null;
+    };
+    expect(body.invocation?.cwd).toBe(workspaceCwd);
   });
 });
 
@@ -521,7 +563,7 @@ describe("voteRoutes M3: cwd allowlist (same policy)", () => {
       cwd: "/etc/passwd",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
     const body = JSON.parse(ctx.responseStub.body) as { error: string };
@@ -534,7 +576,7 @@ describe("voteRoutes M3: cwd allowlist (same policy)", () => {
       cwd: "/root/.ssh",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -545,7 +587,7 @@ describe("voteRoutes M3: cwd allowlist (same policy)", () => {
       cwd: "/tmp",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -556,20 +598,70 @@ describe("voteRoutes M3: cwd allowlist (same policy)", () => {
       cwd: process.cwd(),
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
   });
 
   it("accepts cwd within ~/.octogent/tentacles/<id>/worktree", async () => {
-    const cwd = `${homedir()}/.octogent/tentacles/octopus-2/worktree`;
+    mkdirSync(TENTACLES_ROOT, { recursive: true });
+    const tentacleRoot = mkdtempSync(join(TENTACLES_ROOT, "octopus-"));
+    const cwd = join(tentacleRoot, "worktree");
+    mkdirSync(cwd, { recursive: true });
+    try {
+      const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+        taskInput: "verify groundedness",
+        cwd,
+        dryRun: true,
+      });
+      const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+      expect(handled).toBe(true);
+      expect(ctx.responseStub.status).toBe(200);
+    } finally {
+      rmSync(tentacleRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts configured workspaceCwd and defaults missing cwd to it", async () => {
+    const workspaceCwd = "/root/octogent";
     const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
       taskInput: "verify groundedness",
-      cwd,
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps(workspaceCwd));
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
+  });
+
+  it("rejects symlink cwd that resolves outside the workspace", async () => {
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-workspace-"));
+    const outsideCwd = mkdtempSync(join(tmpdir(), "octogent-outside-"));
+    const escapeLink = join(workspaceCwd, "escape");
+    symlinkSync(outsideCwd, escapeLink, "dir");
+
+    const driverCtx = buildPost("http://x.test/api/claude-brain/drivers/dispatch", {
+      taskType: "verify",
+      taskInput: "harmless input",
+      cwd: escapeLink,
+      dryRun: true,
+    });
+    const driverHandled = await handleDriversDispatchRoute(
+      driverCtx,
+      buildRouteDeps(workspaceCwd),
+    );
+    expect(driverHandled).toBe(true);
+    expect(driverCtx.responseStub.status).toBe(400);
+
+    const voteCtx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify groundedness",
+      cwd: escapeLink,
+      dryRun: true,
+    });
+    const voteHandled = await handleVoteDispatchRoute(voteCtx, buildRouteDeps(workspaceCwd));
+    expect(voteHandled).toBe(true);
+    expect(voteCtx.responseStub.status).toBe(400);
+
+    rmSync(workspaceCwd, { recursive: true, force: true });
+    rmSync(outsideCwd, { recursive: true, force: true });
   });
 });
