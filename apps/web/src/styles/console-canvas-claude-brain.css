@@ -331,3 +331,137 @@
   color: #b8c2d1;
   word-break: break-word;
 }
+
+/* Cross-vendor vote demo — Mechanical Supervision panel at the bottom of
+   RolloutsGantt. Reuses claude-brain-pill / claude-brain-stat / claude-brain-note
+   for shared styling; the .claude-brain-vote-* classes below are specific
+   to the per-voter rows + score bars + consensus arrow. */
+.claude-brain-vote-demo {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed #2b2f36;
+}
+
+.claude-brain-vote-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.4rem;
+}
+
+.claude-brain-vote-task-label {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.74rem;
+  color: #9eb0c8;
+}
+
+.claude-brain-vote-task-input {
+  background: #0c1117;
+  border: 1px solid #2b2f36;
+  color: #dce6f7;
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.55rem;
+  resize: vertical;
+  min-height: 2.4rem;
+}
+
+.claude-brain-vote-task-input:focus {
+  outline: 1px solid color-mix(in srgb, var(--term-green) 50%, #244a34);
+}
+
+.claude-brain-vote-dryrun-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  font-size: 0.74rem;
+  color: #9eb0c8;
+}
+
+.claude-brain-vote-outcome {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.claude-brain-vote-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.claude-brain-vote-arrow {
+  display: block;
+  max-width: 100%;
+}
+
+.claude-brain-vote-voters {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.36rem;
+}
+
+.claude-brain-vote-voter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.34rem 0.5rem;
+  border: 1px solid #2b2f36;
+  background: #11161d;
+}
+
+.claude-brain-vote-voter-name {
+  color: #dce6f7;
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  min-width: 110px;
+}
+
+.claude-brain-vote-voter-error {
+  color: #ffd0d0;
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+  flex-basis: 100%;
+}
+
+.claude-brain-vote-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  font-size: 0.72rem;
+  color: #9eb0c8;
+}
+
+.claude-brain-vote-score-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6f7d92;
+}
+
+.claude-brain-vote-score-bar {
+  display: inline-block;
+  width: 70px;
+  height: 6px;
+  background: #0c1117;
+  border: 1px solid #2b2f36;
+  position: relative;
+  overflow: hidden;
+}
+
+.claude-brain-vote-score-fill {
+  display: block;
+  height: 100%;
+  background: color-mix(in srgb, var(--term-green) 55%, #244a34);
+}
+
+.claude-brain-vote-score-value {
+  font-family: ui-monospace, monospace;
+  color: #b8c2d1;
+  min-width: 2.2rem;
+  text-align: right;
+}
