@@ -178,14 +178,33 @@ export const validateRoutingConfig = (
     }
   }
 
-  // Suppress unused-import lint until we add full type-guard parsing of
-  // RoutingConfig from JSON in a future commit.
-  void isStringArrayOfProviders;
-  void isDriverSpec;
-  void isProvider;
-
   return { ok: errors.length === 0, errors };
 };
+
+// Structural validator for an unknown RoutingRule entry. Used by
+// loadRoutingConfig (and exposed publicly for tests / future callers
+// that need to validate user-supplied JSON before constructing a
+// RoutingConfig). All fields are checked positively — taskType must be
+// a non-empty string, preferred must be a known TerminalAgentProvider,
+// fallback must be an array of known providers, and extraArgs must be
+// an array of strings.
+export const isRoutingRule = (
+  value: unknown,
+  isProvider: (v: unknown) => v is TerminalAgentProvider,
+): value is RoutingRule => {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  if (typeof r.taskType !== "string" || r.taskType.length === 0) return false;
+  if (!isProvider(r.preferred)) return false;
+  if (!Array.isArray(r.fallback) || !r.fallback.every((v) => isProvider(v))) return false;
+  if (!isStringArray(r.extraArgs)) return false;
+  return true;
+};
+
+// Re-export the providers-array guard so loadRoutingConfig can reuse it
+// when it switches from per-field typeof checks to the full type-guard
+// surface. (Previously only consumed inside this module.)
+export { isStringArrayOfProviders };
 
 // Pick the driver that should handle a given task type. Returns the
 // preferred driver if available, else walks the fallback chain. Returns

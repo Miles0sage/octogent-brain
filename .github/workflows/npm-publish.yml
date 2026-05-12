@@ -1,0 +1,174 @@
+name: npm publish
+
+# Tag-driven release: pushing a `vMAJOR.MINOR.PATCH` tag publishes
+# @octogent/core then @octogent/supervisor to the public npm registry.
+#
+# Gating:
+#   1. Trigger requires a strict semver tag (no pre-release for v0.1).
+#   2. The tag version must match BOTH packages/core/package.json and
+#      packages/supervisor/package.json — otherwise we hard-fail before publish.
+#   3. NPM_TOKEN repo secret must be present, otherwise publish is skipped
+#      with a clear error in the GH UI.
+#   4. `pnpm view @octogent/<pkg>@<version>` is run as a pre-publish probe; if
+#      the version is already on the registry we abort to keep publishes idempotent.
+
+on:
+  push:
+    tags:
+      # Strict semver: vMAJOR.MINOR.PATCH (no -rc, -beta, etc. for v0.1).
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# Prevent two runs racing on the same tag (e.g. retag + force push).
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish @octogent/core + @octogent/supervisor
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need the tag itself, plus history for version validation.
+          fetch-depth: 0
+
+      - name: Verify NPM_TOKEN secret is configured
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error title=Missing NPM_TOKEN::The NPM_TOKEN repo secret is not set. Add it under Settings -> Secrets and variables -> Actions before tagging a release."
+            exit 1
+          fi
+          echo "NPM_TOKEN secret is present."
+
+      - name: Extract version from tag
+        id: tag
+        run: |
+          TAG_REF="${GITHUB_REF#refs/tags/}"
+          # Strip the leading 'v' to get the bare semver string.
+          TAG_VERSION="${TAG_REF#v}"
+          echo "tag=${TAG_REF}" >> "${GITHUB_OUTPUT}"
+          echo "version=${TAG_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Tag: ${TAG_REF}"
+          echo "Version: ${TAG_VERSION}"
+
+      - name: Validate tag matches package.json versions
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          CORE_VERSION=$(node -p "require('./packages/core/package.json').version")
+          SUPERVISOR_VERSION=$(node -p "require('./packages/supervisor/package.json').version")
+          echo "Tag version:        ${TAG_VERSION}"
+          echo "Core version:       ${CORE_VERSION}"
+          echo "Supervisor version: ${SUPERVISOR_VERSION}"
+          if [ "${CORE_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error title=Version mismatch::Tag ${TAG_VERSION} does not match @octogent/core version ${CORE_VERSION}. Bump packages/core/package.json before tagging."
+            exit 1
+          fi
+          if [ "${SUPERVISOR_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error title=Version mismatch::Tag ${TAG_VERSION} does not match @octogent/supervisor version ${SUPERVISOR_VERSION}. Bump packages/supervisor/package.json before tagging."
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # Matches .github/workflows/ci.yml — pinned because root package.json
+          # has no `packageManager` field yet.
+          version: 10.4.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+          # `setup-node` writes an .npmrc that consumes NODE_AUTH_TOKEN at
+          # publish time. The publish steps below set NODE_AUTH_TOKEN from
+          # the NPM_TOKEN repo secret.
+          scope: "@octogent"
+          always-auth: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build @octogent/core
+        run: pnpm --filter @octogent/core build:dist
+
+      - name: Build @octogent/supervisor
+        run: pnpm --filter @octogent/supervisor build:dist
+
+      - name: Run all tests (sanity gate)
+        run: pnpm -r test
+
+      - name: Pre-publish probe — @octogent/core
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set +e
+          OUTPUT=$(pnpm view "@octogent/core@${TAG_VERSION}" version 2>&1)
+          STATUS=$?
+          set -e
+          if [ ${STATUS} -eq 0 ] && [ -n "${OUTPUT}" ] && [ "${OUTPUT}" != "undefined" ]; then
+            echo "::error title=Version already published::@octogent/core@${TAG_VERSION} already exists on the registry. Bump the version and re-tag."
+            echo "Registry returned: ${OUTPUT}"
+            exit 1
+          fi
+          echo "@octogent/core@${TAG_VERSION} is not yet on the registry — safe to publish."
+
+      - name: Pre-publish probe — @octogent/supervisor
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set +e
+          OUTPUT=$(pnpm view "@octogent/supervisor@${TAG_VERSION}" version 2>&1)
+          STATUS=$?
+          set -e
+          if [ ${STATUS} -eq 0 ] && [ -n "${OUTPUT}" ] && [ "${OUTPUT}" != "undefined" ]; then
+            echo "::error title=Version already published::@octogent/supervisor@${TAG_VERSION} already exists on the registry. Bump the version and re-tag."
+            echo "Registry returned: ${OUTPUT}"
+            exit 1
+          fi
+          echo "@octogent/supervisor@${TAG_VERSION} is not yet on the registry — safe to publish."
+
+      # Publish core FIRST: supervisor depends on it via `workspace:*`, which
+      # pnpm rewrites to the resolved version on publish. If core is missing,
+      # supervisor will install-fail downstream.
+      - name: Publish @octogent/core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if ! pnpm --filter @octogent/core publish --access public --no-git-checks; then
+            echo "::error title=Publish failed for @octogent/core::publish failed for @octogent/core — check NPM_TOKEN, registry status, and the workflow logs above."
+            exit 1
+          fi
+
+      - name: Publish @octogent/supervisor
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if ! pnpm --filter @octogent/supervisor publish --access public --no-git-checks; then
+            echo "::error title=Publish failed for @octogent/supervisor::publish failed for @octogent/supervisor — check NPM_TOKEN, registry status, and the workflow logs above. @octogent/core has already been published; either npm-unpublish it within 72h or bump the supervisor version and re-publish standalone."
+            exit 1
+          fi
+
+      - name: Summary
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          {
+            echo "## Published"
+            echo ""
+            echo "- \`@octogent/core@${TAG_VERSION}\`"
+            echo "- \`@octogent/supervisor@${TAG_VERSION}\`"
+            echo ""
+            echo "Registry: https://www.npmjs.com/package/@octogent/supervisor"
+          } >> "${GITHUB_STEP_SUMMARY}"

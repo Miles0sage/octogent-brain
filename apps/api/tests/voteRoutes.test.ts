@@ -4,7 +4,7 @@
 // @octogent/supervisor. The HTTP layer is the only place where I/O happens.
 
 import { DEFAULT_ROUTING_CONFIG, type RoutingConfig } from "@octogent/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { handleVoteDispatchRoute } from "../src/createApiServer/voteRoutes";
 
@@ -40,7 +40,14 @@ const buildGet = (url: string) => {
   };
 };
 
-const buildPost = (url: string, body: unknown) => {
+const buildPost = (
+  url: string,
+  body: unknown,
+  options: {
+    headers?: Record<string, string>;
+    remoteAddress?: string;
+  } = {},
+) => {
   const response = buildResponse();
   const bodyStr = JSON.stringify(body);
   const stream = (async function* () {
@@ -48,7 +55,11 @@ const buildPost = (url: string, body: unknown) => {
   })();
   const fakeRequest = Object.assign(stream, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(options.headers ?? {}),
+    },
+    socket: { remoteAddress: options.remoteAddress ?? "127.0.0.1" },
   });
   return {
     request: fakeRequest as unknown as import("node:http").IncomingMessage,
@@ -59,17 +70,19 @@ const buildPost = (url: string, body: unknown) => {
   };
 };
 
+const buildRouteDeps = (workspaceCwd = process.cwd()) => ({ workspaceCwd } as never);
+
 describe("voteRoutes — request validation", () => {
   it("returns 405 on GET", async () => {
     const ctx = buildGet("http://x.test/api/claude-brain/votes/dispatch");
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(405);
   });
 
   it("returns 400 on missing taskInput", async () => {
     const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {});
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
     const body = JSON.parse(ctx.responseStub.body) as { error: string };
@@ -78,7 +91,7 @@ describe("voteRoutes — request validation", () => {
 
   it("returns 400 when body is not a JSON object", async () => {
     const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", "not-an-object");
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(400);
   });
@@ -87,7 +100,7 @@ describe("voteRoutes — request validation", () => {
     const ctx = buildPost("http://x.test/api/claude-brain/other", {
       taskInput: "x",
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(false);
   });
 });
@@ -99,7 +112,7 @@ describe("voteRoutes — dryRun fan-out", () => {
       taskType: "verify",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
     const body = JSON.parse(ctx.responseStub.body) as {
@@ -132,7 +145,7 @@ describe("voteRoutes — dryRun fan-out", () => {
       taskType: "verify",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
     const body = JSON.parse(ctx.responseStub.body) as {
@@ -156,7 +169,7 @@ describe("voteRoutes — dryRun fan-out", () => {
       providers: ["claude-code"],
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(200);
     const body = JSON.parse(ctx.responseStub.body) as {
@@ -173,7 +186,7 @@ describe("voteRoutes — outcome shape contract", () => {
       taskType: "verify",
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     const body = JSON.parse(ctx.responseStub.body) as {
       outcome: {
@@ -198,7 +211,7 @@ describe("voteRoutes — outcome shape contract", () => {
       providers: ["claude-code", "codex"],
       dryRun: true,
     });
-    const handled = await handleVoteDispatchRoute(ctx, {} as never);
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     const body = JSON.parse(ctx.responseStub.body) as {
       dispatch_ids: string[];
@@ -206,6 +219,234 @@ describe("voteRoutes — outcome shape contract", () => {
     };
     expect(body.dispatch_ids.length).toBe(body.outcome.verdicts.length);
     expect(body.dispatch_ids.length).toBe(2);
+  });
+});
+
+// L3 audit r2 H3 (2026-05-12): vote dispatch fan-out hardening.
+//
+// Background: voteRoutes previously accepted any providers list length
+// and ran `Promise.all` across the full set. Combined with the (now
+// closed) auth gap, that gave an attacker a textbook amplification DoS
+// — one HTTP POST could spawn arbitrary N subprocesses. Additionally,
+// one voter throwing synchronously inside its dispatch path rejected
+// the whole tally via Promise.all rather than producing an isolated
+// error voter. Fix:
+//   - MAX_VOTERS = 8 cap on `providers` array (and default selection)
+//   - Dedup providers via Set before fan-out
+//   - Promise.allSettled per voter so an exception in one voter does
+//     not poison the whole vote — the voter gets an `error` field and
+//     the rest still tally.
+describe("voteRoutes H3: fan-out cap + dedup + per-voter try/catch", () => {
+  it("rejects 9-voter requests with HTTP 400 (MAX_VOTERS=8)", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      // 9 entries — over the cap. Repeats are fine; the cap fires on
+      // length before dedup.
+      providers: [
+        "claude-code",
+        "codex",
+        "aider",
+        "gemini-cli",
+        "claude-code",
+        "codex",
+        "aider",
+        "gemini-cli",
+        "claude-code",
+      ],
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+    const body = JSON.parse(ctx.responseStub.body) as { error: string };
+    expect(body.error).toMatch(/providers/i);
+  });
+
+  it("dedups duplicate providers before fan-out", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      // Three duplicates of claude-code — must collapse to one voter.
+      providers: ["claude-code", "claude-code", "claude-code"],
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      dispatch_ids: string[];
+      outcome: { verdicts: Array<{ provider: string }> };
+    };
+    expect(body.outcome.verdicts).toHaveLength(1);
+    expect(body.outcome.verdicts[0]?.provider).toBe("claude-code");
+    expect(body.dispatch_ids).toHaveLength(1);
+  });
+
+  it("rejects empty providers array with HTTP 400", async () => {
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      providers: [],
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(400);
+  });
+
+  it("caps the default (no providers field) fan-out at MAX_VOTERS=8", async () => {
+    // DEFAULT_ROUTING_CONFIG only has 2 evaluator-capable drivers today,
+    // so this asserts the cap is in effect rather than the exact length.
+    // (When the cap kicks in for a real >8-driver config, the slice keeps
+    // the first 8 — the cap behaviour is exercised here defensively.)
+    const ctx = buildPost("http://x.test/api/claude-brain/votes/dispatch", {
+      taskInput: "verify",
+      taskType: "verify",
+      dryRun: true,
+    });
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+    const body = JSON.parse(ctx.responseStub.body) as {
+      outcome: { verdicts: unknown[] };
+    };
+    expect(body.outcome.verdicts.length).toBeLessThanOrEqual(8);
+  });
+});
+
+// L3 audit r2 C1 (2026-05-12): bearer-token auth + per-IP rate limit on
+// /votes/dispatch (and /drivers/dispatch — covered by drivers.test.ts).
+//
+// Threat model:
+//   - When OCTOGENT_API_KEY is unset, only loopback IPs may hit the
+//     endpoint; LAN access is refused with 401.
+//   - When OCTOGENT_API_KEY is set, every request must present a valid
+//     bearer token (Authorization header or X-Octogent-Token). Wrong
+//     or missing token → 401.
+//   - 30 req/min per IP — exceeding → 429. The bucket is per-IP and
+//     in-memory; we reset between tests via resetAuthState().
+describe("voteRoutes C1: bearer-token auth + per-IP rate limit", () => {
+  let prevKey: string | undefined;
+  beforeEach(async () => {
+    prevKey = process.env.OCTOGENT_API_KEY;
+    const { resetAuthState } = await import("../src/createApiServer/security");
+    resetAuthState();
+  });
+  afterEach(async () => {
+    if (prevKey === undefined) {
+      delete process.env.OCTOGENT_API_KEY;
+    } else {
+      process.env.OCTOGENT_API_KEY = prevKey;
+    }
+    const { resetAuthState } = await import("../src/createApiServer/security");
+    resetAuthState();
+  });
+
+  it("refuses LAN access with 401 when OCTOGENT_API_KEY is unset", async () => {
+    delete process.env.OCTOGENT_API_KEY;
+    const ctx = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      { remoteAddress: "192.168.1.42" },
+    );
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(401);
+  });
+
+  it("allows loopback access with 200 when OCTOGENT_API_KEY is unset", async () => {
+    delete process.env.OCTOGENT_API_KEY;
+    const ctx = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      { remoteAddress: "127.0.0.1" },
+    );
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+  });
+
+  it("refuses with 401 when API key is set but no Authorization header is sent", async () => {
+    process.env.OCTOGENT_API_KEY = "test-secret-12345";
+    const ctx = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      { remoteAddress: "127.0.0.1" },
+    );
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(401);
+  });
+
+  it("refuses with 401 when bearer token is wrong", async () => {
+    process.env.OCTOGENT_API_KEY = "test-secret-12345";
+    const ctx = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      {
+        remoteAddress: "127.0.0.1",
+        headers: { authorization: "Bearer wrong-key" },
+      },
+    );
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(401);
+  });
+
+  it("accepts with 200 when bearer token matches", async () => {
+    process.env.OCTOGENT_API_KEY = "test-secret-12345";
+    const ctx = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      {
+        remoteAddress: "127.0.0.1",
+        headers: { authorization: "Bearer test-secret-12345" },
+      },
+    );
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+  });
+
+  it("accepts with 200 when X-Octogent-Token header is used", async () => {
+    process.env.OCTOGENT_API_KEY = "test-secret-12345";
+    const ctx = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      {
+        remoteAddress: "127.0.0.1",
+        headers: { "x-octogent-token": "test-secret-12345" },
+      },
+    );
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
+  });
+
+  it("returns 429 when the per-IP rate limit is exceeded", async () => {
+    delete process.env.OCTOGENT_API_KEY;
+    const remoteAddress = "127.0.0.1";
+    // The bucket allows 30 / minute. Fire 31 requests in a tight loop;
+    // the 31st must come back 429.
+    for (let i = 0; i < 30; i++) {
+      const ctx = buildPost(
+        "http://x.test/api/claude-brain/votes/dispatch",
+        { taskInput: "verify", dryRun: true },
+        { remoteAddress },
+      );
+      const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+      expect(handled).toBe(true);
+      expect(ctx.responseStub.status).toBe(200);
+    }
+    const overflow = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      { remoteAddress },
+    );
+    const handled = await handleVoteDispatchRoute(overflow, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(overflow.responseStub.status).toBe(429);
   });
 });
 

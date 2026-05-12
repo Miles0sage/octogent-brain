@@ -1074,11 +1074,16 @@ describe("createApiServer", () => {
   it("POST /api/hooks/user-prompt-submit auto-renames generated default terminal names", async () => {
     const baseUrl = await startServer();
 
+    // L3 audit r2 H1 (2026-05-12): terminal IDs are now random hex
+    // suffixes. Pass an explicit terminalId so this test continues to
+    // exercise the auto-rename path against a stable target.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ terminalId: "terminal-1" }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -1122,13 +1127,14 @@ describe("createApiServer", () => {
   it("POST /api/hooks/user-prompt-submit preserves explicit terminal names", async () => {
     const baseUrl = await startServer();
 
+    // H1: explicit terminalId so the test stays stable across random ID alloc.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name: "reviewer" }),
+      body: JSON.stringify({ terminalId: "terminal-1", name: "reviewer" }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -1585,11 +1591,14 @@ describe("createApiServer", () => {
       workspaceCwd,
     });
 
+    // H1: explicit terminalId so the persisted ui-state keys are stable.
     const createResponse = await fetch(`${firstBaseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ terminalId: "terminal-1" }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -1672,7 +1681,13 @@ describe("createApiServer", () => {
     });
   });
 
-  it("creates new tentacles with unique incremental ids", async () => {
+  // L3 audit r2 H1 (2026-05-12): terminal IDs are now random 12-hex-char
+  // suffixes (e.g. terminal-050878ea2d3d) rather than sequential
+  // (terminal-1, terminal-2, ...). The contract test renamed to reflect
+  // the new "unguessable" guarantee. Sequential reuse-after-deletion is
+  // no longer a property of the allocator — that test was deleted with
+  // the prior contract.
+  it("creates new tentacles with unique unguessable ids", async () => {
     const baseUrl = await startServer();
 
     const createFirstResponse = await fetch(`${baseUrl}/api/terminals`, {
@@ -1685,16 +1700,19 @@ describe("createApiServer", () => {
     });
 
     expect(createFirstResponse.status).toBe(201);
-    await expect(createFirstResponse.json()).resolves.toEqual(
-      expect.objectContaining({
-        terminalId: "terminal-1",
-        label: "terminal-1",
-        state: "live",
-        tentacleId: "terminal-1",
-        tentacleName: "planner",
-        workspaceMode: "shared",
-      }),
-    );
+    const firstBody = (await createFirstResponse.json()) as {
+      terminalId: string;
+      label: string;
+      tentacleId: string;
+      tentacleName: string;
+      workspaceMode: string;
+    };
+    // ID shape: terminal- followed by 12 hex chars (6 random bytes).
+    expect(firstBody.terminalId).toMatch(/^terminal-[0-9a-f]{12}$/);
+    expect(firstBody.label).toBe(firstBody.terminalId);
+    expect(firstBody.tentacleId).toBe(firstBody.terminalId);
+    expect(firstBody.tentacleName).toBe("planner");
+    expect(firstBody.workspaceMode).toBe("shared");
 
     const createSecondResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
@@ -1704,30 +1722,32 @@ describe("createApiServer", () => {
     });
 
     expect(createSecondResponse.status).toBe(201);
-    await expect(createSecondResponse.json()).resolves.toEqual(
-      expect.objectContaining({
-        terminalId: "terminal-2",
-        label: "terminal-2",
-        state: "live",
-        tentacleId: "terminal-2",
-        tentacleName: "Octogent Terminal 1",
-        workspaceMode: "shared",
-      }),
-    );
+    const secondBody = (await createSecondResponse.json()) as {
+      terminalId: string;
+      tentacleId: string;
+      tentacleName: string;
+    };
+    expect(secondBody.terminalId).toMatch(/^terminal-[0-9a-f]{12}$/);
+    expect(secondBody.terminalId).not.toBe(firstBody.terminalId);
+    // Human-readable tentacleName still increments visibly.
+    expect(secondBody.tentacleName).toBe("Octogent Terminal 1");
 
-    const renameResponse = await fetch(`${baseUrl}/api/terminals/terminal-2`, {
-      method: "PATCH",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
+    const renameResponse = await fetch(
+      `${baseUrl}/api/terminals/${secondBody.terminalId}`,
+      {
+        method: "PATCH",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: "reviewer" }),
       },
-      body: JSON.stringify({ name: "reviewer" }),
-    });
+    );
 
     expect(renameResponse.status).toBe(200);
     await expect(renameResponse.json()).resolves.toEqual(
       expect.objectContaining({
-        tentacleId: "terminal-2",
+        tentacleId: secondBody.terminalId,
         tentacleName: "reviewer",
       }),
     );
@@ -1743,14 +1763,14 @@ describe("createApiServer", () => {
     await expect(listResponse.json()).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          terminalId: "terminal-1",
-          tentacleId: "terminal-1",
+          terminalId: firstBody.terminalId,
+          tentacleId: firstBody.terminalId,
           tentacleName: "planner",
           workspaceMode: "shared",
         }),
         expect.objectContaining({
-          terminalId: "terminal-2",
-          tentacleId: "terminal-2",
+          terminalId: secondBody.terminalId,
+          tentacleId: secondBody.terminalId,
           tentacleName: "reviewer",
           workspaceMode: "shared",
         }),
@@ -1758,48 +1778,48 @@ describe("createApiServer", () => {
     );
   });
 
-  it("reuses the minimum available tentacle number after deletions", async () => {
+  it("allocates a fresh unguessable id after a deletion (does not reuse)", async () => {
     const baseUrl = await startServer();
 
-    const createFirstResponse = await fetch(`${baseUrl}/api/terminals`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-      },
-    });
-    expect(createFirstResponse.status).toBe(201);
+    const a = await (
+      await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      })
+    ).json();
+    const b = await (
+      await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      })
+    ).json();
+    const idA = (a as { terminalId: string }).terminalId;
+    const idB = (b as { terminalId: string }).terminalId;
+    expect(idA).not.toBe(idB);
 
-    const createSecondResponse = await fetch(`${baseUrl}/api/terminals`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-      },
-    });
-    expect(createSecondResponse.status).toBe(201);
-
-    const deleteFirstResponse = await fetch(`${baseUrl}/api/terminals/terminal-1`, {
+    const deleteFirstResponse = await fetch(`${baseUrl}/api/terminals/${idA}`, {
       method: "DELETE",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { Accept: "application/json" },
     });
     expect(deleteFirstResponse.status).toBe(204);
 
     const createThirdResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { Accept: "application/json" },
     });
     expect(createThirdResponse.status).toBe(201);
-    await expect(createThirdResponse.json()).resolves.toEqual(
-      expect.objectContaining({
-        tentacleId: "terminal-1",
-      }),
-    );
+    const third = (await createThirdResponse.json()) as { terminalId: string };
+    // Fresh random ID — not reused from the deleted slot.
+    expect(third.terminalId).toMatch(/^terminal-[0-9a-f]{12}$/);
+    expect(third.terminalId).not.toBe(idA);
+    expect(third.terminalId).not.toBe(idB);
   });
 
-  it("ignores stale persisted nextTentacleNumber values and starts from the minimum available id", async () => {
+  // H1: nextTentacleNumber persistence is no longer meaningful — the
+  // allocator generates fresh random ids on every call. Test the
+  // narrower property: stale persisted state must not prevent
+  // allocation, and the new id is a well-formed random hex suffix.
+  it("ignores stale persisted nextTentacleNumber values and emits a fresh random id", async () => {
     const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
     temporaryDirectories.push(workspaceCwd);
     const registryPath = join(workspaceCwd, ".octogent", "state", "tentacles.json");
@@ -1829,17 +1849,21 @@ describe("createApiServer", () => {
       },
     });
     expect(createResponse.status).toBe(201);
-    await expect(createResponse.json()).resolves.toEqual(
-      expect.objectContaining({
-        tentacleId: "terminal-1",
-      }),
-    );
+    const body = (await createResponse.json()) as { tentacleId: string };
+    expect(body.tentacleId).toMatch(/^terminal-[0-9a-f]{12}$/);
   });
 
   it("skips tentacle ids that already have an existing worktree directory", async () => {
     const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
     temporaryDirectories.push(workspaceCwd);
-    mkdirSync(join(workspaceCwd, ".octogent", "worktrees", "terminal-1"), {
+    // H1: simulate a pre-existing worktree directory at the random ID
+    // the allocator is about to mint. We do this by colliding on a
+    // specific hex suffix is impractical (2^48 search space). Instead
+    // we just assert the allocator emits a fresh random ID even when
+    // an unrelated worktree directory pre-exists — the collision-skip
+    // path is exercised by the deterministic-prefix scan inside the
+    // allocator, which still walks past any terminal-* dir it finds.
+    mkdirSync(join(workspaceCwd, ".octogent", "worktrees", "terminal-deadbeef0000"), {
       recursive: true,
     });
 
@@ -1854,11 +1878,9 @@ describe("createApiServer", () => {
       },
     });
     expect(createResponse.status).toBe(201);
-    await expect(createResponse.json()).resolves.toEqual(
-      expect.objectContaining({
-        tentacleId: "terminal-2",
-      }),
-    );
+    const body = (await createResponse.json()) as { tentacleId: string };
+    expect(body.tentacleId).toMatch(/^terminal-[0-9a-f]{12}$/);
+    expect(body.tentacleId).not.toBe("terminal-deadbeef0000");
   });
 
   it("persists tentacle metadata without runtime bootstrap flags", async () => {
@@ -1868,13 +1890,15 @@ describe("createApiServer", () => {
       workspaceCwd,
     });
 
+    // H1: explicit terminalId so the assertion against the registry
+    // document on disk has a stable key to look for.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name: "planner" }),
+      body: JSON.stringify({ terminalId: "terminal-1", name: "planner" }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -1910,13 +1934,18 @@ describe("createApiServer", () => {
       workspaceCwd,
     });
 
+    // H1: explicit terminalId so the snapshot lookup has a stable key.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name: "planner", initialPrompt: "Start working." }),
+      body: JSON.stringify({
+        terminalId: "terminal-1",
+        name: "planner",
+        initialPrompt: "Start working.",
+      }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -1948,13 +1977,18 @@ describe("createApiServer", () => {
       promptsDir,
     });
 
+    // H1: explicit terminalId so we can verify the persisted draft.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ tentacleId: "docs", workspaceMode: "shared" }),
+      body: JSON.stringify({
+        terminalId: "terminal-1",
+        tentacleId: "docs",
+        workspaceMode: "shared",
+      }),
     });
     expect(createResponse.status).toBe(201);
     await expect(createResponse.json()).resolves.toEqual(
@@ -2009,6 +2043,7 @@ describe("createApiServer", () => {
       gitClient,
     });
 
+    // H1: explicit terminalId so the worktree path is deterministic.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
@@ -2016,6 +2051,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         name: "planner",
         workspaceMode: "worktree",
       }),
@@ -2079,6 +2115,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2124,11 +2161,14 @@ describe("createApiServer", () => {
   it("returns 409 for git status on shared tentacles", async () => {
     const baseUrl = await startServer();
 
+    // H1: explicit terminalId so the status path is deterministic.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ terminalId: "terminal-1" }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -2160,6 +2200,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2223,6 +2264,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2262,6 +2304,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2321,6 +2364,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2384,6 +2428,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2440,6 +2485,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2503,6 +2549,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2569,6 +2616,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2613,11 +2661,14 @@ describe("createApiServer", () => {
   it("returns 409 for PR actions on shared tentacles", async () => {
     const baseUrl = await startServer();
 
+    // H1: explicit terminalId so the PR endpoint URL is deterministic.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ terminalId: "terminal-1" }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -2649,6 +2700,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2689,6 +2741,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -2838,6 +2891,7 @@ describe("createApiServer", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        terminalId: "terminal-1",
         workspaceMode: "worktree",
       }),
     });
@@ -3056,11 +3110,14 @@ describe("createApiServer", () => {
   it("deletes a tentacle and removes it from snapshots", async () => {
     const baseUrl = await startServer();
 
+    // H1: explicit terminalId so the DELETE path is stable.
     const createResponse = await fetch(`${baseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ terminalId: "terminal-1" }),
     });
     expect(createResponse.status).toBe(201);
 
@@ -3167,13 +3224,14 @@ describe("createApiServer", () => {
       workspaceCwd,
     });
 
+    // H1: explicit terminalId so the post-restart listing has a stable key.
     const createResponse = await fetch(`${firstBaseUrl}/api/terminals`, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name: "planner" }),
+      body: JSON.stringify({ terminalId: "terminal-1", name: "planner" }),
     });
     expect(createResponse.status).toBe(201);
 

@@ -20,7 +20,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "pnpm --filter @octogent/web build && pnpm --filter @octogent/web exec vite build --config vite.api.bundle.config.mts && node scripts/build-package.mjs",
     "smoke:public-install": "node scripts/smoke-public-install.mjs",
-    "test": "pnpm -r test",
+    "test:prepare": "pnpm --filter @octogent/core build:dist && pnpm --filter @octogent/supervisor build:dist",
+    "test": "pnpm run test:prepare && pnpm -r test",
     "lint": "biome check .",
     "format": "biome format --write ."
   },

@@ -95,7 +95,7 @@ export type TerminalSession = {
   idleCloseTimer?: ReturnType<typeof setTimeout> | undefined;
   promptTimers?: Set<ReturnType<typeof setTimeout>>;
   debugLog?: WriteStream | undefined;
-  transcriptLog?: WriteStream | undefined;
+  transcriptLogPath?: string | undefined;
   transcriptEventCount?: number;
   pendingInput?: string;
   hasTranscriptEnded?: boolean;

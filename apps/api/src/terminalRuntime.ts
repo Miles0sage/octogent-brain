@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -282,28 +283,27 @@ export const createTerminalRuntime = ({
 
   reconcilePersistedLifecycle();
 
+  // L3 audit r2 H1 (2026-05-12): unguessable terminal IDs.
+  //
+  // The prior allocator handed out terminal-1, terminal-2, ... sequentially,
+  // making every terminal ID guessable by anyone who could reach the API.
+  // Combined with the (now-closed) auth gap, that gave attackers an IDOR
+  // primitive on setAutoVerdictLoop / WebSocket connect / channel writes.
+  // Defence-in-depth: even with auth, IDs must be unguessable. The human-
+  // readable label lives on `tentacleName` (e.g. "Octogent Terminal 1"),
+  // which is unchanged.
+  //
+  // 6 random bytes => 12 hex chars => ~2^48 IDs. Collision-resistant for
+  // any realistic session count. Retry on collision; bail after 1000 tries.
   const allocateTerminalId = () => {
-    let candidateNumber = 1;
-    while (candidateNumber < Number.MAX_SAFE_INTEGER) {
-      const candidateId = `${TERMINAL_ID_PREFIX}${candidateNumber}`;
-      if (terminals.has(candidateId)) {
-        candidateNumber += 1;
-        continue;
-      }
-
-      if (sessions.has(candidateId)) {
-        candidateNumber += 1;
-        continue;
-      }
-
-      if (worktreeManager.hasTentacleWorktree(candidateId)) {
-        candidateNumber += 1;
-        continue;
-      }
-
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      const suffix = randomBytes(6).toString("hex");
+      const candidateId = `${TERMINAL_ID_PREFIX}${suffix}`;
+      if (terminals.has(candidateId)) continue;
+      if (sessions.has(candidateId)) continue;
+      if (worktreeManager.hasTentacleWorktree(candidateId)) continue;
       return candidateId;
     }
-
     throw new Error("Unable to allocate terminal id.");
   };
 

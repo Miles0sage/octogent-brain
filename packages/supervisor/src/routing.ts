@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import {
   DEFAULT_ROUTING_CONFIG,
+  isDriverSpec,
+  isRoutingRule,
   isTerminalAgentProvider,
   type RoutingConfig,
   validateRoutingConfig,
@@ -16,6 +18,9 @@ export const resolveRoutingPath = (): string =>
   process.env.OCTOGENT_ROUTING_CONFIG?.trim() ||
   join(homedir(), ".octogent-better", "routing.json");
 
+// Top-level shape check. The per-entry validation in `isFullRoutingConfig`
+// below is the load-bearing security gate — this just narrows to a shape
+// that has the right top-level fields before we iterate.
 const isPartialRoutingConfig = (value: unknown): value is RoutingConfig => {
   if (typeof value !== "object" || value === null) return false;
   const r = value as Record<string, unknown>;
@@ -24,6 +29,30 @@ const isPartialRoutingConfig = (value: unknown): value is RoutingConfig => {
   if (!Array.isArray(r.rules)) return false;
   if (typeof r.defaultProvider !== "string") return false;
   return true;
+};
+
+// Per-entry shape check. Every driver in `config.drivers` must satisfy
+// `isDriverSpec` (well-formed transport, capability array, command,
+// baseArgs string[], requiredEnv string[]). Every rule in `config.rules`
+// must satisfy `isRoutingRule` (taskType non-empty string, preferred a
+// known provider, fallback a provider array, extraArgs a string array).
+// This closes L3-r2 C1: previously the loader only ran `Array.isArray`
+// on drivers/rules, leaving an open hole where a hostile routing.json
+// could ship `extraArgs: [{...}]` or `baseArgs: [{...}]` that the
+// dispatcher's `--` argv guard wouldn't protect (because the hostile
+// entries land BEFORE `--`).
+const isFullRoutingConfig = (config: RoutingConfig): string | null => {
+  for (let i = 0; i < config.drivers.length; i++) {
+    if (!isDriverSpec(config.drivers[i], isTerminalAgentProvider)) {
+      return `drivers[${i}] failed isDriverSpec`;
+    }
+  }
+  for (let i = 0; i < config.rules.length; i++) {
+    if (!isRoutingRule(config.rules[i], isTerminalAgentProvider)) {
+      return `rules[${i}] failed isRoutingRule`;
+    }
+  }
+  return null;
 };
 
 export type RoutingLoadResult =
@@ -72,6 +101,16 @@ export const loadRoutingConfig = (path?: string): RoutingLoadResult => {
       reason: "schema-invalid",
       path: resolvedPath,
       errors: ["routing.json must be a RoutingConfig with version=1, drivers[], rules[], defaultProvider"],
+    };
+  }
+
+  const perEntryError = isFullRoutingConfig(parsed);
+  if (perEntryError !== null) {
+    return {
+      ok: false,
+      reason: "schema-invalid",
+      path: resolvedPath,
+      errors: [perEntryError],
     };
   }
 
