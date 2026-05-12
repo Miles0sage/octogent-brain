@@ -1,4 +1,10 @@
-import { type WriteStream, createWriteStream, existsSync, mkdirSync } from "node:fs";
+import {
+  type WriteStream,
+  appendFileSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+} from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -123,17 +129,17 @@ export const createSessionRuntime = ({
     session.debugLog?.write(`${new Date().toISOString()} ${line}\n`);
   };
 
-  const createTranscriptLog = (sessionId: string) => {
+  // Transcript writes use per-line atomic appendFileSync (POSIX O_APPEND
+  // is atomic for sub-PIPE_BUF writes — JSON-line events are well under
+  // 4 kB). The earlier createWriteStream path buffered internally and
+  // left a window where concurrent readers (tests, tooling tailing the
+  // transcript) saw partial lines and JSON.parse-failed. Codex audit
+  // 2026-05-12. The session keeps a resolved path; the WriteStream
+  // value-shape stays only for debugLog which has no concurrent reader.
+  const createTranscriptLogPath = (sessionId: string): string => {
     ensureTranscriptDirectory(transcriptDirectoryPath);
     const filename = transcriptFilenameForSession(sessionId);
-    const stream = createWriteStream(join(transcriptDirectoryPath, filename), {
-      flags: "a",
-      encoding: "utf8",
-    });
-    stream.on("error", () => {
-      // Keep terminal flow alive even if transcript writes fail.
-    });
-    return stream;
+    return join(transcriptDirectoryPath, filename);
   };
 
   const appendTranscriptEvent = (
@@ -141,7 +147,7 @@ export const createSessionRuntime = ({
     sessionId: string,
     event: ConversationTranscriptEventPayload,
   ) => {
-    if (!session.transcriptLog) {
+    if (!session.transcriptLogPath) {
       return;
     }
 
@@ -153,7 +159,11 @@ export const createSessionRuntime = ({
       sessionId,
       tentacleId: session.tentacleId,
     } as ConversationTranscriptEvent;
-    session.transcriptLog.write(`${JSON.stringify(payload)}\n`);
+    try {
+      appendFileSync(session.transcriptLogPath, `${JSON.stringify(payload)}\n`, "utf8");
+    } catch {
+      // Keep terminal flow alive even if transcript writes fail.
+    }
   };
 
   const closeTranscript = (
@@ -167,8 +177,7 @@ export const createSessionRuntime = ({
 
     appendTranscriptEvent(session, sessionId, event);
     session.hasTranscriptEnded = true;
-    session.transcriptLog?.end();
-    session.transcriptLog = undefined;
+    session.transcriptLogPath = undefined;
   };
 
   const emitStateIfChanged = (
@@ -567,7 +576,7 @@ export const createSessionRuntime = ({
 
     const stateTracker = new AgentStateTracker();
     const debugLog = createDebugLog(sessionId);
-    const transcriptLog = createTranscriptLog(sessionId);
+    const transcriptLogPath = createTranscriptLogPath(sessionId);
     const session: TerminalSession = {
       terminalId: sessionId,
       tentacleId,
@@ -589,7 +598,7 @@ export const createSessionRuntime = ({
     if (debugLog) {
       session.debugLog = debugLog;
     }
-    session.transcriptLog = transcriptLog;
+    session.transcriptLogPath = transcriptLogPath;
 
     appendDebugLog(session, `session-start session=${sessionId} tentacle=${tentacleId}`);
     const processId =

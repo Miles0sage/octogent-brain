@@ -65,8 +65,11 @@ Aider + Codex, pick the winner by consensus → strong-reject → qualified
 majority. Anthropic structurally can't ship this because cross-vendor
 routing cannibalizes their API revenue — so it's the moat.
 
-Apache MIT, zero deps beyond zod. Node 22+. 401 tests. Hosted dashboard
-at octogent.dev if you want to skip the install.
+MIT licensed. Node 22+. One workspace dep (@octogent/core, also MIT,
+also published from this monorepo). 86 substrate tests (29 supervisor +
+57 core); the full octogent-brain dashboard adds ~315 more for a 401
+repo total. No hosted demo URL yet — the README has the 90-second
+screen recording, install + run locally to follow along.
 
 What I'd love to know:
 1. Is the "verdict JSON tail" contract reasonable, or should I expose

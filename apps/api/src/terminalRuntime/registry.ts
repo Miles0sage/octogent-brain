@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { TERMINAL_REGISTRY_VERSION } from "./constants";
@@ -366,14 +366,28 @@ const serializeTerminalRegistry = (state: TerminalRegistryState) => {
   return `${JSON.stringify(document, null, 2)}\n`;
 };
 
+// Atomic write: stage to a temp file in the same directory, then
+// rename(2) over the target. Concurrent readers either see the prior
+// fully-written file or the new fully-written file — never a partial
+// truncated state. POSIX rename is atomic within a filesystem. Fixes
+// the JSON-mid-write race surfaced by parallel api tests
+// (createApiServer.test.ts:442 waitForRegistryDocument, sessionRuntime
+// transcript reads). Codex audit 2026-05-12.
+const stagingPath = (target: string): string =>
+  `${target}.${process.pid}.${Date.now()}.tmp`;
+
 const writeSerializedRegistrySync = (registryPath: string, serialized: string) => {
   mkdirSync(dirname(registryPath), { recursive: true });
-  writeFileSync(registryPath, serialized, "utf8");
+  const tmp = stagingPath(registryPath);
+  writeFileSync(tmp, serialized, "utf8");
+  renameSync(tmp, registryPath);
 };
 
 const writeSerializedRegistry = async (registryPath: string, serialized: string) => {
   mkdirSync(dirname(registryPath), { recursive: true });
-  await writeFile(registryPath, serialized, "utf8");
+  const tmp = stagingPath(registryPath);
+  await writeFile(tmp, serialized, "utf8");
+  await rename(tmp, registryPath);
 };
 
 export const persistTerminalRegistry = (registryPath: string, state: TerminalRegistryState) => {
