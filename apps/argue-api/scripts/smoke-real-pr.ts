@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { serve } from "bun";
@@ -9,7 +9,9 @@ import { createAppFetchHandler } from "../src/app";
 const DEFAULT_PR_URL = "https://github.com/openai/openai-node/pull/1837";
 const POLL_MS = Number(process.env.ARGUED_SMOKE_POLL_MS ?? "2000");
 const TIMEOUT_MS = Number(process.env.ARGUED_SMOKE_TIMEOUT_MS ?? "300000");
-const KEEP_ARTIFACTS = process.env.ARGUED_SMOKE_KEEP_ARTIFACTS === "1";
+const ARTIFACT_DIR = process.env.ARGUED_SMOKE_ARTIFACT_DIR?.trim() || null;
+const KEEP_ARTIFACTS =
+  ARTIFACT_DIR != null || process.env.ARGUED_SMOKE_KEEP_ARTIFACTS === "1";
 
 const SEEDED_PRIORS = [
   {
@@ -82,7 +84,7 @@ async function main() {
       };
 
       if (result.status === "done" || result.status === "error") {
-        console.log(JSON.stringify({
+        const summaryPayload = {
           prUrl,
           dbPath: KEEP_ARTIFACTS ? dbPath : null,
           artifactsKept: KEEP_ARTIFACTS,
@@ -101,7 +103,15 @@ async function main() {
               issues: Array.isArray(verdict["issues"]) ? (verdict["issues"] as unknown[]).slice(0, 2) : [],
             })),
           },
-        }, null, 2));
+        };
+        const summaryJson = JSON.stringify(summaryPayload, null, 2);
+        console.log(summaryJson);
+
+        if (ARTIFACT_DIR) {
+          await mkdir(ARTIFACT_DIR, { recursive: true });
+          await writeFile(join(ARTIFACT_DIR, "result.json"), summaryJson);
+          await copyFile(dbPath, join(ARTIFACT_DIR, "argued.sqlite")).catch(() => {});
+        }
         return;
       }
 

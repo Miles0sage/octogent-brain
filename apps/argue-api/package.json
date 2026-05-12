@@ -6,6 +6,7 @@
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
     "smoke:real-seeded": "bun scripts/smoke-real-pr.ts",
+    "release:gate": "bun scripts/release-gate.ts",
     "test": "bun --bun x vitest run",
     "test:watch": "vitest"
   },
