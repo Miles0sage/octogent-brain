@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS verdicts (
   reasoning TEXT,
   cost_usd REAL NOT NULL DEFAULT 0,
   duration_ms INTEGER NOT NULL DEFAULT 0,
-  gate_pass INTEGER NOT NULL,
+  gate_pass INTEGER NOT NULL CHECK (gate_pass IN (0, 1)),
   PRIMARY KEY (argument_id, cli)
 );
 
