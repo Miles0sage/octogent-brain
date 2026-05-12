@@ -14,7 +14,7 @@ export async function dispatchClaudeCode(
   input: ArgueInput,
   runner: Runner = defaultRunProcess
 ): Promise<RawVerdict> {
-  const prompt = buildArguePrompt(input);
+  const prompt = buildArguePrompt(input, "claude-code");
 
   return withTempWorkspace("argued-claude", async (cwd) => {
     const result = await runner(CLAUDE_BIN, ["--print", prompt], {

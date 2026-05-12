@@ -25,7 +25,7 @@ export async function dispatchCodex(
   input: ArgueInput,
   runner: Runner = defaultRunProcess
 ): Promise<RawVerdict> {
-  const prompt = buildArguePrompt(input);
+  const prompt = buildArguePrompt(input, "codex");
 
   return withTempWorkspace("argued-codex", async (cwd) => {
     const outputPath = join(cwd, "last-message.txt");

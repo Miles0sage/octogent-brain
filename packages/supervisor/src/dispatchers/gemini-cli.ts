@@ -15,7 +15,7 @@ export async function dispatchGeminiCli(
   input: ArgueInput,
   runner: Runner = defaultRunProcess
 ): Promise<RawVerdict> {
-  const prompt = buildArguePrompt(input);
+  const prompt = buildArguePrompt(input, "gemini-cli");
 
   return withTempWorkspace("argued-gemini", async (cwd) => {
     const args = ["-p", prompt, "-o", "json"];

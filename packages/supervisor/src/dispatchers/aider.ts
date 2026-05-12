@@ -15,7 +15,7 @@ export async function dispatchAider(
   input: ArgueInput,
   runner: Runner = defaultRunProcess
 ): Promise<RawVerdict> {
-  const prompt = buildArguePrompt(input);
+  const prompt = buildArguePrompt(input, "aider");
 
   return withTempWorkspace("argued-aider", async (cwd) => {
     const result = await runner(
