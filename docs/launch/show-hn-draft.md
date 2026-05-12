@@ -13,13 +13,22 @@
 
 ## Title (the headline matters most)
 
-**Show HN: I lost 90 days to a rubber-stamping Claude — here's the npm wrap I wish existed**
+**Show HN: Octogent – 3 LLMs vote on every diff before it touches your repo**
+
+L5 positioning A/B/C/D scorecard (research/2026-05-12-octogent-agency-r2/lane-5-positioning-test.md) ranked this title 9/10 CTR with the highest brand-compounding runway (synthesis framing wins 85/100 vs A=42, B=53, C=76).
+
+**Tagline:**
+> *Three LLMs vote on every diff. Local. Free. The verifier Anthropic can't ship.*
+
+**12-word description:**
+> *Aider writes. Claude reviews. Codex breaks ties. Local cross-vendor verifier loop.*
 
 Alternates if A/B testing:
-- Show HN: Mechanical Supervision — an npm wrap that catches AI agents lying about their own work
-- Show HN: Cross-vendor verifier for Claude / Aider / Codex / Gemini in 12 lines of TypeScript
+- Show HN: I lost 90 days to a rubber-stamping Claude — here's the npm wrap I wish existed (lived-experience C3, 7/10)
+- Show HN: Octogent – Aider writes, Claude reviews, Codex breaks ties (C1, 8/10)
+- Show HN: The vendor-neutral verifier loop Anthropic structurally can't ship (D2, 7/10)
 
-Pick the lived-experience version. It opens a story; the others open a feature.
+The synthesis version (D1) wins because HN Algolia shows ONE Ask HN with no answer — latent demand, no supply. The other framings either have zero hits ("Mechanical Supervision", framing A, nbHits=0) or sit in a crowded category ("trust layer", framing B, AgentSign already there).
 
 ## Body
 

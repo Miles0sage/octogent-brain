@@ -66,3 +66,23 @@ Do not pivot into:
 - hosted-cloud-first messaging before the local trust layer is adopted
 
 That path dilutes the only sharp thing in the repo.
+
+## Locked Launch Copy (2026-05-12 r2 agency-swarm L5)
+
+Empirically scored 4 framings on HN Algolia + adjacent OSS evidence; D synthesis won 85/100.
+
+- **Show HN title:** `Show HN: Octogent – 3 LLMs vote on every diff before it touches your repo`
+- **Tagline:** *Three LLMs vote on every diff. Local. Free. The verifier Anthropic can't ship.*
+- **12-word description:** *Aider writes. Claude reviews. Codex breaks ties. Local cross-vendor verifier loop.*
+
+Do NOT lead with "Mechanical Supervision" — zero HN keyword surface (nbHits: 0).
+Do NOT lead with "Trust Layer for AI Agents" — crowded category (AgentSign + MCP Trust Layer already there).
+Do lead with cross-vendor voting + the moat sentence ("Anthropic structurally can't ship this — it requires a third party willing to route across Claude + Aider + Codex").
+
+## L4 Pivot Note (Anthropic shipped horizontal verifier T+1 day)
+
+Anthropic merged `CMA_verify_with_outcome_grader.ipynb` (cookbook PR #599, 2026-05-06) — a stateless grader that re-checks artifacts in a fresh context. The 30-day round-1 forecast landed 23 days early. The pure "we invented the verifier" framing is now reference architecture on the Anthropic repo.
+
+**v0.2 wedge:** Adopt the Anthropic CMA rubric format as the supervisor's input contract. Run the SAME rubric across Claude + Codex + Gemini outputs. Vote. Surface disagreement. We're not competing with Anthropic Managed Agents — we're routing their pattern across vendors they can't reach.
+
+Source: `research/2026-05-12-octogent-r2/lane-4-anthropic-7day-refresh.md`.
