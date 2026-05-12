@@ -9,18 +9,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@octogent/core": "workspace:*",
-    "@octogent/supervisor": "workspace:*",
-    "@octogent/oracle": "workspace:*",
-    "@octogent/pr-fetcher": "workspace:*",
-    "better-sqlite3": "^11.3.0",
-    "nanoid": "^5.0.7",
-    "zod": "^3.23.8"
+    "better-sqlite3": "^12.10.0",
+    "nanoid": "^5.1.11",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/bun": "latest",
     "msw": "^2.6.0",
-    "vitest": "^2.1.4"
+    "vitest": "^4.1.6"
   }
 }
