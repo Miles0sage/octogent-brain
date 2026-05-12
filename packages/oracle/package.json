@@ -1,0 +1,21 @@
+{
+  "name": "@octogent/oracle",
+  "version": "0.3.0-pre.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "bun --bun x vitest run",
+    "ingest": "bun scripts/ingest.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^2.1.0",
+    "@libsql/client": "^0.17.3",
+    "sqlite-vec": "^0.1.9"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
