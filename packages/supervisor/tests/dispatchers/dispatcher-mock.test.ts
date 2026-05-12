@@ -46,4 +46,26 @@ describe("dispatchers (mocked subprocess)", () => {
       expect(v.state).toBe("parse_failed");
     });
   }
+
+  it("codex transport failure on quota cap reports retry-after + attempts=1", async () => {
+    const runner = vi.fn().mockResolvedValue({
+      stdout: "",
+      stderr:
+        "ERROR: usage cap reached for chatgpt account. Retry available at May 13, 2026 2:13 AM UTC.",
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      durationMs: 200,
+    } satisfies SpawnResult);
+
+    const v = await dispatchCodex(INPUT, runner);
+    expect(v.cli).toBe("codex");
+    expect(v.state).toBe("transport_failed");
+    expect(v.decision).toBeNull();
+    const message = v.issues[0]?.message ?? "";
+    expect(message).toContain("vendor quota exceeded");
+    expect(message).toContain("retry after 2026-05-13T02:13:00.000Z");
+    expect(message).toContain("attempts=1");
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
 });
