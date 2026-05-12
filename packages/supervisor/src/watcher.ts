@@ -30,7 +30,7 @@ import {
   DEFAULT_REVIEW_FIX_LOOP_CONFIG,
   decideNext,
   evaluateVerdict,
-  parseReviewerVerdict,
+  narrowReviewerVerdict,
   type GateConfig,
   type GateDecision,
   type LoopDecision,
@@ -43,6 +43,84 @@ import {
 // catch even prose-wrapped JSON yet small enough that the parser stays
 // cheap on every chunk arrival.
 const SCAN_WINDOW_BYTES = 16 * 1024;
+
+// L3 audit r2 H2 (2026-05-12): JSON-DoS caps on the verdict extractor.
+//
+// Threat: an attacker influences agent stdout (prompt injection via task
+// description or poisoned RAG doc). The watcher runs `extractAllVerdicts`
+// on every chunk; a chunk packed with thousands of balanced JSON
+// candidates or one ~8KB deeply-nested candidate stalls the event loop
+// inside JSON.parse. Caps:
+//
+//   MAX_VERDICT_CANDIDATES_PER_CHUNK — bail after this many candidates
+//   MAX_CANDIDATE_BYTES — drop any candidate whose byte span exceeds this
+//   MAX_VERDICT_NESTING_DEPTH — drop a candidate the moment depth exceeds
+const MAX_VERDICT_CANDIDATES_PER_CHUNK = 8;
+const MAX_CANDIDATE_BYTES = 4 * 1024;
+const MAX_VERDICT_NESTING_DEPTH = 32;
+
+// Bounded, allocation-aware walker for top-level JSON objects in a
+// scrollback buffer. Replaces the unrestricted core walker for the
+// watcher's hot path. Note: returns ReviewerVerdict[] (narrowed) — the
+// caller does not need to revalidate.
+const extractAllVerdicts = (buffer: string): ReviewerVerdict[] => {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < buffer.length; i++) {
+    const ch = buffer[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+      if (depth > MAX_VERDICT_NESTING_DEPTH) {
+        // Abandon this candidate completely — too deep to parse safely.
+        depth = 0;
+        start = -1;
+      }
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const span = i + 1 - start;
+        if (span <= MAX_CANDIDATE_BYTES) {
+          candidates.push(buffer.slice(start, i + 1));
+          if (candidates.length >= MAX_VERDICT_CANDIDATES_PER_CHUNK) break;
+        }
+        start = -1;
+      } else if (depth < 0) {
+        depth = 0;
+        start = -1;
+      }
+    }
+  }
+  const out: ReviewerVerdict[] = [];
+  for (const candidate of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const narrowed = narrowReviewerVerdict(parsed);
+    if (narrowed) out.push(narrowed);
+  }
+  return out;
+};
 
 export type VerdictWatcherConfig = {
   gate: GateConfig;
@@ -107,12 +185,28 @@ const truncatedTail = (buffer: string): string =>
 // receiver is a bare shell (rather than an agent CLI), unsanitized bytes
 // could trigger command execution. Strip every ESC sequence + control
 // byte; the receiver gets prose text only. Per L3 audit C3 (2026-05-12).
+// L3 audit r2 L1 (2026-05-12): the prior CSI strip required a final
+// terminator byte (@-~), so unterminated CSI sequences slipped through
+// as visible "[malicious_payload" fragments. The replacement first
+// strips well-formed CSI (parameters/intermediates/final), then strips
+// any leftover ESC[ prefix with optional parameter / intermediate bytes
+// up to the next final byte OR end-of-string. Also strips OSC/DCS/SOS/
+// PM/APC introducers and bracketed-paste markers for completeness.
 const sanitizeForBracketedPaste = (value: string): string =>
   value
-    // Strip any bracketed-paste markers the LLM may have echoed back.
+    // Bracketed-paste markers the LLM may have echoed back.
     .replace(/\x1b\[20[01]~/g, "")
-    // Strip all CSI escape sequences (ESC [ ... letter).
+    // Well-formed CSI (ESC [ params? intermediates? final-byte).
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    // Unterminated CSI: ESC [ followed by params/intermediates that
+    // never hit a final byte. Strip whatever remains up to the next
+    // non-CSI byte. Matches "ESC [" + zero-or-more param/intermediate
+    // bytes, then an optional final byte if present (already covered).
+    .replace(/\x1b\[[\x20-\x3f]*/g, "")
+    // Other ESC-introduced control strings: OSC (ESC ]), DCS (ESC P),
+    // SOS (ESC X), PM (ESC ^), APC (ESC _). Each can carry payload up
+    // to ST (ESC \) or BEL.
+    .replace(/\x1b[\]PX^_][^\x07\x1b]*(?:\x1b\\|\x07)?/g, "")
     // Strip C0 controls (NUL through US, except LF and CR) + DEL.
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, " ");
 
@@ -136,59 +230,11 @@ const buildReinjectPrompt = (verdict: ReviewerVerdict, gate: GateDecision): stri
   ].join("\n");
 };
 
-// Walk a buffer and return every balanced top-level JSON object that
-// successfully parses as a ReviewerVerdict, in document order. Mirrors
-// the extraction logic in packages/core/src/orchestrator/verdict-gate.ts
-// but returns ALL candidates rather than just the last — required for
-// L3 M5 multi-verdict-per-chunk handling. Kept private to watcher.ts so
-// the core export stays focused on the "final line wins" contract.
-const extractAllVerdicts = (buffer: string): ReviewerVerdict[] => {
-  const candidates: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < buffer.length; i++) {
-    const ch = buffer[i];
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        candidates.push(buffer.slice(start, i + 1));
-        start = -1;
-      } else if (depth < 0) {
-        depth = 0;
-        start = -1;
-      }
-    }
-  }
-  const out: ReviewerVerdict[] = [];
-  for (const c of candidates) {
-    // Round-trip through parseReviewerVerdict so the narrowing logic is
-    // shared (verdict literal, scores in [0,1], etc.). We call the
-    // single-candidate parser on the isolated JSON string so it picks
-    // up exactly that candidate without confusion.
-    const parsed = parseReviewerVerdict(c);
-    if (parsed !== null) out.push(parsed);
-  }
-  return out;
-};
+// Multi-verdict extraction. The watcher owns the bounded walker above
+// (extractAllVerdicts) so the JSON-DoS caps are enforced at the only
+// hot path that scans LLM-influenced bytes on every chunk. The shape
+// narrowing is delegated to @octogent/core's narrowReviewerVerdict so
+// the contract stays single-sourced (L3 audit r2 H2, 2026-05-12).
 
 export const createVerdictWatcher = (
   config: VerdictWatcherConfig = {
@@ -220,9 +266,12 @@ export const createVerdictWatcher = (
   const recordSeen = (key: string): void => {
     seenVerdictKeys.add(key);
     if (seenVerdictKeys.size > maxIters) {
-      // Set preserves insertion order; drop the oldest.
-      const oldest = seenVerdictKeys.values().next().value;
-      if (oldest !== undefined) seenVerdictKeys.delete(oldest);
+      // Set preserves insertion order. Size > maxIters >= 0 implies
+      // the iterator yields a defined first entry — narrow with a cast
+      // rather than a runtime undefined guard (L3 audit r2 L2,
+      // 2026-05-12).
+      const oldest = seenVerdictKeys.values().next().value as string;
+      seenVerdictKeys.delete(oldest);
     }
   };
 

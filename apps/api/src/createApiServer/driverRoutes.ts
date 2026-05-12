@@ -17,6 +17,7 @@ import {
   writeJson,
   writeMethodNotAllowed,
 } from "./routeHelpers";
+import { checkAuthorizedRequest } from "./security";
 
 const isString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
@@ -132,6 +133,15 @@ export const handleDriversDispatchRoute: ApiRouteHandler = async (
   }
   if (request.method !== "POST") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  // L3 audit r2 C1 (2026-05-12): bearer-token / loopback gate + per-IP
+  // rate limit. /drivers/dispatch spawns subprocesses; identical gate
+  // to /votes/dispatch.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
 

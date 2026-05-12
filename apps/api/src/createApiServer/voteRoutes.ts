@@ -39,8 +39,18 @@ import {
   writeJson,
   writeMethodNotAllowed,
 } from "./routeHelpers";
+import { checkAuthorizedRequest } from "./security";
 
 const VOTE_PATH = "/api/claude-brain/votes/dispatch";
+
+// L3 audit r2 H3 (2026-05-12): fan-out cap. Any single request that
+// fans out to more than this many voters spawns one subprocess per
+// voter — even with auth in place, an unbounded list is an
+// amplification multiplier (one POST -> N spawns). 8 is enough for
+// every realistic cross-vendor consensus pool today (4-vendor matrix
+// plus future headroom) and small enough that the per-request worst
+// case stays bounded.
+const MAX_VOTERS = 8;
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
@@ -62,16 +72,23 @@ const selectDefaultProviders = (
     .map((d) => d.provider);
 
 // Concatenate stdout text from a dispatch's event stream into a single
-// string suitable for parseReviewerVerdict. Stderr is intentionally
-// excluded — the verdict JSON contract is on stdout (the dispatcher's
-// stdio transport routes the model's response there).
+// string suitable for parseReviewerVerdict + suitable for human
+// consumption in voter.raw_output. Stderr is intentionally excluded —
+// the verdict JSON contract is on stdout (the dispatcher's stdio
+// transport routes the model's response there).
+//
+// L3 audit r2 L3 (2026-05-12): preserve event boundaries by separating
+// chunks with a newline. parseReviewerVerdict walks the entire buffer
+// for balanced JSON objects, so inserting newlines does not change
+// parse behaviour. It does make raw_output legible when streamed back
+// to the client (dashboards / debugging).
 const aggregateStdout = (
   events: ReadonlyArray<{ kind: string; data?: string }>,
 ): string =>
   events
     .filter((e): e is { kind: "stdout"; data: string } => e.kind === "stdout")
     .map((e) => e.data)
-    .join("");
+    .join("\n");
 
 export const handleVoteDispatchRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
@@ -82,6 +99,15 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
   }
   if (request.method !== "POST") {
     writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  // L3 audit r2 C1 (2026-05-12): bearer-token / loopback gate + per-IP
+  // rate limit. The route must reject before reading the body so a
+  // hostile client cannot exhaust JSON parsing budget pre-auth.
+  const auth = checkAuthorizedRequest(request);
+  if (!auth.ok) {
+    writeJson(response, auth.status, { error: auth.reason }, corsOrigin);
     return true;
   }
 
@@ -129,9 +155,32 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
 
   // Resolve which providers to fan out to. Explicit list wins; otherwise
   // every evaluator-capable driver in the routing config votes.
+  //
+  // L3 audit r2 H3 (2026-05-12): cap the fan-out at MAX_VOTERS and dedup
+  // the list before dispatching. Without these guards one request could
+  // spawn N subprocesses (DoS amplifier).
   let providers: ReadonlyArray<TerminalAgentProvider>;
   if (isStringArray(fields.providers)) {
     const requested = fields.providers;
+    if (requested.length === 0) {
+      writeJson(
+        response,
+        400,
+        { error: "providers must be a non-empty array" },
+        corsOrigin,
+      );
+      return true;
+    }
+    if (requested.length > MAX_VOTERS) {
+      writeJson(
+        response,
+        400,
+        { error: `providers list exceeds MAX_VOTERS=${MAX_VOTERS}` },
+        corsOrigin,
+      );
+      return true;
+    }
+    const seen = new Set<TerminalAgentProvider>();
     const validated: TerminalAgentProvider[] = [];
     for (const p of requested) {
       if (!isTerminalAgentProvider(p)) {
@@ -143,11 +192,15 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
         );
         return true;
       }
+      if (seen.has(p)) continue;
+      seen.add(p);
       validated.push(p);
     }
     providers = validated;
   } else {
-    providers = selectDefaultProviders(config);
+    // Default selection is still capped — a hostile routing.json could
+    // declare 100 evaluator-capable drivers; the cap saves us.
+    providers = selectDefaultProviders(config).slice(0, MAX_VOTERS);
   }
 
   const startedAt = Date.now();
@@ -162,7 +215,12 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
   // synthesize a single-driver, single-rule config that pins that provider
   // as the preferred for the task. This keeps the dispatcher's safety
   // checks intact without reaching into its internals.
-  const perVoter = await Promise.all(
+  //
+  // L3 audit r2 H3 (2026-05-12): wrap each voter in Promise.allSettled so
+  // one voter's synchronous or asynchronous throw cannot reject the
+  // whole tally. The rejected voter surfaces as an error voter; the
+  // rest still tally.
+  const settled = await Promise.allSettled(
     providers.map(async (provider) => {
       const driver = config.drivers.find((d) => d.provider === provider);
       if (!driver) {
@@ -216,6 +274,25 @@ export const handleVoteDispatchRoute: ApiRouteHandler = async (
       };
     }),
   );
+
+  const perVoter = settled.map((entry, idx) => {
+    if (entry.status === "fulfilled") return entry.value;
+    const provider = providers[idx] as TerminalAgentProvider;
+    const message =
+      entry.reason instanceof Error
+        ? entry.reason.message
+        : String(entry.reason);
+    return {
+      provider,
+      dispatch_id: randomUUID(),
+      voter: {
+        provider,
+        verdict: null,
+        raw_output: "",
+        error: `voter-exception: ${message}`,
+      } satisfies VoterVerdict,
+    };
+  });
 
   const votes: VoterVerdict[] = perVoter.map((p) => p.voter);
   const dispatchIds = perVoter.map((p) => p.dispatch_id);

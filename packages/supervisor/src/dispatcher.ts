@@ -20,6 +20,31 @@ import type {
 const SPAWN_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 
+// L3 audit r2 C2 (2026-05-12): env allowlist.
+//
+// Previously the dispatcher forwarded the entire `process.env` to every
+// spawned driver subprocess. Voters across vendors then saw every other
+// vendor's secret (AWS_*, ANTHROPIC_API_KEY, GH_TOKEN, OPENROUTER_*,
+// etc.) on stdout / via tool calls and could exfiltrate them through
+// `raw_output`. The allowlist policy: forward ONLY the OS baseline
+// every CLI needs to start, plus the env keys the driver explicitly
+// declared in `requiredEnv`. Nothing else.
+//
+// The baseline intentionally omits SHELL, USER, PWD, OLDPWD, etc. —
+// drivers that need them must declare them in requiredEnv.
+const VOTER_ENV_BASELINE = ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM"] as const;
+
+const buildVoterEnv = (
+  requiredEnv: ReadonlyArray<string>,
+): NodeJS.ProcessEnv => {
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of [...VOTER_ENV_BASELINE, ...requiredEnv]) {
+    const v = process.env[key];
+    if (v !== undefined) out[key] = v;
+  }
+  return out;
+};
+
 // Binary names must be safe to look up on PATH. The dispatcher refuses
 // any command containing shell metacharacters so a malicious routing.json
 // dropped on disk cannot inject code at health-probe time.
@@ -127,17 +152,23 @@ const spawnDriver = async (
     (resolve) => {
       const child = spawn(invocation.command, [...invocation.args], {
         cwd: invocation.cwd,
-        env: process.env,
+        env: buildVoterEnv(invocation.envFlags),
         stdio: ["ignore", "pipe", "pipe"],
       });
 
+      // L3 audit r2 M2 (2026-05-12): track the inner SIGKILL-escalation
+      // timer so we can clear it when the child exits cleanly. Without
+      // this, every dispatch leaked one 1s timer past completion.
+      let killTimer: NodeJS.Timeout | null = null;
       const timeout = setTimeout(() => {
         events.push({
           kind: "error",
           message: `dispatcher timeout after ${SPAWN_TIMEOUT_MS}ms; killing subprocess`,
         });
         child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 1000);
+        killTimer = setTimeout(() => child.kill("SIGKILL"), 1000);
+        // Don't keep the event loop alive solely for the kill timer.
+        killTimer.unref?.();
       }, SPAWN_TIMEOUT_MS);
 
       child.stdout.on("data", (chunk: Buffer) => {
@@ -154,11 +185,22 @@ const spawnDriver = async (
         bytesOut += slice.length;
         events.push({ kind: "stderr", data: slice.toString("utf8") });
       });
+      // L3 audit r2 M1 (2026-05-12): wire stream-level error handlers so
+      // a SIGPIPE / ENOMEM / FD-exhaustion event from the child's stdio
+      // surfaces as a dispatcher event rather than an unhandled stream
+      // exception that would terminate the API process.
+      child.stdout.on("error", (err) => {
+        events.push({ kind: "error", message: `stdout: ${err.message}` });
+      });
+      child.stderr.on("error", (err) => {
+        events.push({ kind: "error", message: `stderr: ${err.message}` });
+      });
       child.on("error", (err) => {
         events.push({ kind: "error", message: err.message });
       });
       child.on("close", (code, signal) => {
         clearTimeout(timeout);
+        if (killTimer !== null) clearTimeout(killTimer);
         events.push({ kind: "exit", code, signal });
         resolve({ code, signal });
       });

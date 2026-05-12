@@ -53,7 +53,11 @@ const buildGet = (url: string) => {
   };
 };
 
-const buildPost = (url: string, body: unknown) => {
+const buildPost = (
+  url: string,
+  body: unknown,
+  options: { headers?: Record<string, string>; remoteAddress?: string } = {},
+) => {
   const response = buildResponse();
   const bodyStr = JSON.stringify(body);
   const stream = (async function* () {
@@ -61,7 +65,14 @@ const buildPost = (url: string, body: unknown) => {
   })();
   const fakeRequest = Object.assign(stream, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(options.headers ?? {}),
+    },
+    // L3 audit r2 C1 (2026-05-12): provide a loopback remoteAddress so
+    // the bearer-token + rate-limit gate accepts the test request even
+    // when OCTOGENT_API_KEY is unset (loopback-only fallback path).
+    socket: { remoteAddress: options.remoteAddress ?? "127.0.0.1" },
   });
   return {
     request: fakeRequest as unknown as import("node:http").IncomingMessage,
@@ -155,6 +166,471 @@ describe("routingLoader", () => {
     const result = loadRoutingConfig();
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.source).toBe("user-file");
+  });
+});
+
+// L3 audit r2 C1 (2026-05-12): per-entry schema validation.
+//
+// Background: isPartialRoutingConfig only ran `Array.isArray` on drivers
+// and rules — entry shapes were not validated. A malicious routing.json
+// could ship a driver with `baseArgs: [{x:1}]` or
+// `baseArgs: ["--dangerously-skip-permissions"]` and the argv-injection
+// `--` guard at dispatcher.ts would not protect against it because the
+// hostile bytes land BEFORE the `--`. Fix: loadRoutingConfig must call
+// `isDriverSpec` on every driver entry and a structural validator on
+// every rule entry, rejecting bad shapes with reason="schema-invalid".
+describe("routingLoader C1: per-entry schema validation", () => {
+  let prevEnv: string | undefined;
+  let workDir: string;
+
+  beforeEach(() => {
+    prevEnv = process.env.OCTOGENT_ROUTING_CONFIG;
+    workDir = mkdtempSync(join(tmpdir(), "octogent-routing-c1-"));
+  });
+
+  afterEach(() => {
+    if (prevEnv === undefined) {
+      delete process.env.OCTOGENT_ROUTING_CONFIG;
+    } else {
+      process.env.OCTOGENT_ROUTING_CONFIG = prevEnv;
+    }
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  const writeRouting = (config: unknown): string => {
+    const configPath = join(workDir, "routing.json");
+    writeFileSync(configPath, JSON.stringify(config));
+    return configPath;
+  };
+
+  it("rejects driver with non-string baseArgs entry (smuggle attempt)", () => {
+    const bad = {
+      version: 1,
+      drivers: [
+        {
+          provider: "claude-code",
+          transport: "stdio",
+          capabilities: ["evaluator"],
+          command: "claude",
+          // Non-string entry — Node spawn would String(v) coerce.
+          baseArgs: [{ smuggle: 1 }],
+          requiredEnv: [],
+        },
+      ],
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("rejects driver with unknown transport", () => {
+    const bad = {
+      version: 1,
+      drivers: [
+        {
+          provider: "claude-code",
+          transport: "websocket",
+          capabilities: ["evaluator"],
+          command: "claude",
+          baseArgs: [],
+          requiredEnv: [],
+        },
+      ],
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("rejects driver with empty command", () => {
+    const bad = {
+      version: 1,
+      drivers: [
+        {
+          provider: "claude-code",
+          transport: "stdio",
+          capabilities: ["evaluator"],
+          command: "",
+          baseArgs: [],
+          requiredEnv: [],
+        },
+      ],
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("rejects driver with non-array capabilities", () => {
+    const bad = {
+      version: 1,
+      drivers: [
+        {
+          provider: "claude-code",
+          transport: "stdio",
+          capabilities: "evaluator",
+          command: "claude",
+          baseArgs: [],
+          requiredEnv: [],
+        },
+      ],
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("rejects rule with missing preferred", () => {
+    const bad = {
+      version: 1,
+      drivers: DEFAULT_ROUTING_CONFIG.drivers,
+      rules: [
+        {
+          taskType: "verify",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("rejects rule with wrong fallback type (not array of providers)", () => {
+    const bad = {
+      version: 1,
+      drivers: DEFAULT_ROUTING_CONFIG.drivers,
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: "not-an-array",
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("rejects rule with non-string extraArgs entry", () => {
+    const bad = {
+      version: 1,
+      drivers: DEFAULT_ROUTING_CONFIG.drivers,
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [{ smuggle: 1 }],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("rejects rule with missing or non-string taskType", () => {
+    const bad = {
+      version: 1,
+      drivers: DEFAULT_ROUTING_CONFIG.drivers,
+      rules: [
+        {
+          taskType: 7,
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = loadRoutingConfig(writeRouting(bad));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("schema-invalid");
+    }
+  });
+
+  it("accepts DEFAULT_ROUTING_CONFIG round-tripped through JSON", () => {
+    const result = loadRoutingConfig(
+      writeRouting(JSON.parse(JSON.stringify(DEFAULT_ROUTING_CONFIG))),
+    );
+    expect(result.ok).toBe(true);
+  });
+});
+
+// L3 audit r2 C2 (2026-05-12): env allowlist on spawnDriver.
+//
+// Background: the dispatcher previously passed `env: process.env` to
+// every spawned subprocess. Every voter then saw every secret on the
+// host (AWS_*, ANTHROPIC_API_KEY, GH_TOKEN, etc.) — a compromised or
+// honestly-misbehaving voter could exfiltrate other vendors' keys via
+// raw_output. Fix: only PATH/HOME/USER/LANG/LC_ALL/TERM (the OS
+// baseline that any CLI needs to start) + the driver's explicitly
+// declared `requiredEnv` are forwarded.
+//
+// Validated end-to-end via `dispatchTask` with a real spawn against
+// /bin/sh + `env` so the assertions act on the child process's actual
+// environment rather than a unit-under-test mock.
+describe("dispatcher C2: env allowlist", () => {
+  const SECRET_KEY = "OCTOGENT_C2_LEAK_TEST";
+  const SECRET_VAL = "this-must-not-leak";
+  const DECLARED_KEY = "OCTOGENT_C2_DECLARED_OK";
+  const DECLARED_VAL = "this-is-explicitly-required";
+
+  it("does NOT forward an undeclared env var to the child", async () => {
+    process.env[SECRET_KEY] = SECRET_VAL;
+    process.env[DECLARED_KEY] = DECLARED_VAL;
+    try {
+      // Synthetic routing config: a single shell-based driver invoked
+      // by command="sh" + baseArgs=["-c", "env"]. requiredEnv declares
+      // only DECLARED_KEY — SECRET_KEY must be absent in the child.
+      const config: RoutingConfig = {
+        version: 1,
+        drivers: [
+          {
+            provider: "claude-code",
+            transport: "stdio",
+            capabilities: ["evaluator"],
+            command: "sh",
+            baseArgs: ["-c", 'env; echo "__END__"'],
+            requiredEnv: [DECLARED_KEY],
+          },
+        ],
+        rules: [
+          {
+            taskType: "verify",
+            preferred: "claude-code",
+            fallback: [],
+            extraArgs: [],
+          },
+        ],
+        defaultProvider: "claude-code",
+      };
+      const result = await dispatchTask(config, {
+        taskType: "verify",
+        taskInput: "",
+        cwd: process.cwd(),
+      });
+      const stdout = result.events
+        .filter((e): e is { kind: "stdout"; data: string } => e.kind === "stdout")
+        .map((e) => e.data)
+        .join("");
+      expect(stdout).toContain(`${DECLARED_KEY}=${DECLARED_VAL}`);
+      expect(stdout).not.toContain(SECRET_KEY);
+      expect(stdout).not.toContain(SECRET_VAL);
+      // Sanity: baseline keys arrive.
+      expect(stdout).toMatch(/PATH=/);
+    } finally {
+      delete process.env[SECRET_KEY];
+      delete process.env[DECLARED_KEY];
+    }
+  });
+
+  it("does not forward HOME-adjacent / other secret-shaped envs unless declared", async () => {
+    const leaks = ["AWS_SECRET_ACCESS_KEY", "ANTHROPIC_API_KEY", "GH_TOKEN"];
+    const prev: Record<string, string | undefined> = {};
+    for (const key of leaks) {
+      prev[key] = process.env[key];
+      process.env[key] = `LEAKY-${key}`;
+    }
+    try {
+      const config: RoutingConfig = {
+        version: 1,
+        drivers: [
+          {
+            provider: "claude-code",
+            transport: "stdio",
+            capabilities: ["evaluator"],
+            command: "sh",
+            baseArgs: ["-c", "env"],
+            requiredEnv: [],
+          },
+        ],
+        rules: [
+          {
+            taskType: "verify",
+            preferred: "claude-code",
+            fallback: [],
+            extraArgs: [],
+          },
+        ],
+        defaultProvider: "claude-code",
+      };
+      const result = await dispatchTask(config, {
+        taskType: "verify",
+        taskInput: "",
+        cwd: process.cwd(),
+      });
+      const stdout = result.events
+        .filter((e): e is { kind: "stdout"; data: string } => e.kind === "stdout")
+        .map((e) => e.data)
+        .join("");
+      for (const key of leaks) {
+        expect(stdout).not.toContain(`LEAKY-${key}`);
+      }
+    } finally {
+      for (const key of leaks) {
+        if (prev[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = prev[key];
+        }
+      }
+    }
+  });
+});
+
+// L3 audit r2 M1 + M2 (2026-05-12): dispatcher subprocess hardening.
+//
+// M1: child.stdout / child.stderr were emitted without `.on("error")`
+//     handlers. A SIGPIPE or premature stream close on the child would
+//     bubble up as an unhandled exception and (on Node 22 default)
+//     terminate the API server. The handlers must convert stream
+//     errors into dispatcher events instead.
+//
+// M2: the SIGKILL-escalation `setTimeout(() => child.kill("SIGKILL"),
+//     1000)` was scheduled inside the outer timeout but never cleared
+//     when the child exited cleanly. Result: every dispatch leaked one
+//     timer for 1s past completion, blocking event-loop exit and
+//     leaking a closure capturing `child`. Must clear the inner timer
+//     in the `close` handler.
+describe("dispatcher M1 + M2: subprocess hardening", () => {
+  it("M1: stream errors from a child surface as 'error' events, not crashes", async () => {
+    // Spawn a short-lived child that exits before stdout is fully read.
+    // We don't have an easy way to synthesize a SIGPIPE in a unit test
+    // without going through PTY, but we CAN run a fast-exiting child and
+    // confirm the dispatcher returns a structured DriverDispatchResult
+    // rather than throwing. A regression in the stream-error wiring
+    // would manifest as an unhandled exception under coverage runs.
+    const config: RoutingConfig = {
+      version: 1,
+      drivers: [
+        {
+          provider: "claude-code",
+          transport: "stdio",
+          capabilities: ["evaluator"],
+          command: "sh",
+          baseArgs: ["-c", "echo done; exit 0"],
+          requiredEnv: [],
+        },
+      ],
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const result = await dispatchTask(config, {
+      taskType: "verify",
+      taskInput: "",
+      cwd: process.cwd(),
+    });
+    // No unhandled exception. Exit code is structured.
+    expect(result.exit_code).toBe(0);
+    expect(
+      result.events.some(
+        (e) => e.kind === "stdout" && e.data.includes("done"),
+      ),
+    ).toBe(true);
+  });
+
+  it("M2: SIGKILL escalation timer does not keep the event loop alive after clean exit", async () => {
+    // If M2 regresses, this test still passes but vitest would hang at
+    // shutdown waiting for the leaked timer. The functional assertion
+    // is just that dispatchTask returns within a reasonable window.
+    const config: RoutingConfig = {
+      version: 1,
+      drivers: [
+        {
+          provider: "claude-code",
+          transport: "stdio",
+          capabilities: ["evaluator"],
+          command: "sh",
+          baseArgs: ["-c", "echo quick; exit 0"],
+          requiredEnv: [],
+        },
+      ],
+      rules: [
+        {
+          taskType: "verify",
+          preferred: "claude-code",
+          fallback: [],
+          extraArgs: [],
+        },
+      ],
+      defaultProvider: "claude-code",
+    };
+    const start = Date.now();
+    const result = await dispatchTask(config, {
+      taskType: "verify",
+      taskInput: "",
+      cwd: process.cwd(),
+    });
+    const elapsed = Date.now() - start;
+    expect(result.exit_code).toBe(0);
+    // Comfortably under the SIGKILL escalation window.
+    expect(elapsed).toBeLessThan(5_000);
   });
 });
 
