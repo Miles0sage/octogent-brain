@@ -7,8 +7,43 @@ in this repository are documented here. This project adheres to
 
 ## [Unreleased]
 
-### Deferred to v0.2.0
+## [0.2.0] - TBD
 
+### Added (wave 1 — types only, no api wiring yet)
+
+- **`@octogent/core` — CMA rubric portability schema.** New
+  `CmaRubric` and `CmaGradeResult` types that mirror Anthropic's
+  outcome-grader shape from
+  `anthropics/claude-cookbooks/managed_agents/CMA_verify_with_outcome_grader.ipynb`
+  (cookbook PR #599, 2026-05-06). Ships with bounded type-guards
+  (`isCmaRubric`, `isCmaGradeResult`) and a tail-JSON parser
+  (`parseCmaGradeFromText`) that mirrors the `parseReviewerVerdict`
+  discipline in `verdict-gate.ts` — final balanced JSON object wins,
+  earlier scratch JSON is ignored.
+- **`@octogent/supervisor` — CMA grade <-> ReviewerVerdict adapter.**
+  `cmaGradeToReviewerVerdict(grade, rubric)` collapses per-criterion
+  CMA grades into the supervisor's existing two-score
+  (groundedness / specificity) verdict shape: `weighted_average ->
+  groundedness`, `1 - variance(scores) -> specificity`. The adapter
+  preserves `passed -> verdict` semantics and emits an `issues[]`
+  entry for every criterion that scored below the rubric's
+  `passing_threshold`. `buildCmaPromptInjection(rubric)` returns a
+  system-prefix string that asks any voter LLM to grade against the
+  rubric and emit a `CmaGradeResult` JSON tail.
+- **Evidence stub:** `docs/evidence/2026-05-12-cma-3vendor-grade-stub.md`
+  documents the planned 3-vendor live-grade run; promoted once
+  `NPM_TOKEN` is configured and wave 1b ships the `voteRoutes.ts`
+  rubric-injection plumbing.
+
+### Deferred to v0.2.x
+
+- **Voter-route rubric injection (wave 1b).** `apps/api`'s
+  `POST /api/claude-brain/votes/dispatch` will gain an optional
+  `rubric: CmaRubric` field that prefixes each voter prompt via
+  `buildCmaPromptInjection` and runs each response through
+  `parseCmaGradeFromText` + `cmaGradeToReviewerVerdict` before
+  `tallyVotes`. Backward-compatible — absent rubric falls back to the
+  current free-form `ReviewerVerdict` tail.
 - **Cost-cap enforcement.** Per-run and per-vote budget caps that hard-stop the
   dispatcher when a cumulative dollar-spend threshold is crossed. Design spec
   at [`docs/superpowers/specs/2026-05-12-cost-cap-design.md`](docs/superpowers/specs/2026-05-12-cost-cap-design.md).

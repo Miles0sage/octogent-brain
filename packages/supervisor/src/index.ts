@@ -70,3 +70,19 @@ export {
   type VoteOutcome,
   type VoterVerdict,
 } from "./vote";
+
+export {
+  buildCmaPromptInjection,
+  cmaGradeToReviewerVerdict,
+} from "./cma-adapter";
+
+// Re-export CMA portability types from @octogent/core so supervisor
+// consumers don't need a second dependency just to type a rubric.
+export {
+  isCmaGradeResult,
+  isCmaRubric,
+  parseCmaGradeFromText,
+  type CmaGradeResult,
+  type CmaRubric,
+  type CmaRubricCriterion,
+} from "@octogent/core";
