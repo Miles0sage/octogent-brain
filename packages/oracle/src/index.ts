@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { embed as defaultEmbed } from "./embed.js";
+import { ensureOracleSchema } from "./schema.js";
 
 export interface Prior {
   cluster_id: string;
@@ -44,3 +45,4 @@ export function createOracle(db: Database, opts: OracleOpts = {}) {
 export { filterCorpus, type CorpusEntry } from "./filter.js";
 export { embed } from "./embed.js";
 export { l2Normalize } from "./normalize.js";
+export { ensureOracleSchema } from "./schema.js";

@@ -10,19 +10,24 @@ describe("supervisor.argue", () => {
       reasoning: `from ${cli}`,
       cost_usd: 0.01,
       duration_ms: 100,
+      state: "ok" as const,
     }));
+
+    const onVerdict = vi.fn();
     const result = await argue(
       { diff: "x", description: "y", ciStatus: "none", darwin_priors: [] },
-      { dispatch }
+      { dispatch, onVerdict }
     );
+
     expect(result.verdicts).toHaveLength(4);
     expect(result.verdicts.map((v) => v.cli).sort()).toEqual(
       ["aider", "claude-code", "codex", "gemini-cli"]
     );
     expect(dispatch).toHaveBeenCalledTimes(4);
+    expect(onVerdict).toHaveBeenCalledTimes(4);
   });
 
-  it("returns synthetic failure verdict when dispatch rejects", async () => {
+  it("returns transport failure verdict when dispatch rejects", async () => {
     const dispatch = vi.fn(async (cli: string) => {
       if (cli === "aider") throw new Error("aider not installed");
       return {
@@ -32,15 +37,19 @@ describe("supervisor.argue", () => {
         reasoning: `from ${cli}`,
         cost_usd: 0,
         duration_ms: 50,
+        state: "ok" as const,
       };
     });
+
     const result = await argue(
       { diff: "x", description: "y", ciStatus: "none", darwin_priors: [] },
       { dispatch }
     );
+
     expect(result.verdicts).toHaveLength(4);
     const aider = result.verdicts.find((v) => v.cli === "aider")!;
-    expect(aider.decision).toBe("REJECT");
-    expect(aider.reasoning).toMatch(/dispatcher error/i);
+    expect(aider.decision).toBeNull();
+    expect(aider.state).toBe("transport_failed");
+    expect(aider.reasoning).toMatch(/transport failure/i);
   });
 });

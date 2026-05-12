@@ -16,3 +16,16 @@
 # L3 audit follow-up: tsbuildinfo files are TS incremental build
 # artifacts — they vary by working tree, never want them committed.
 **/*.tsbuildinfo
+.aider*
+
+# OMC session state (per-checkout, never committed)
+.omc/
+**/.omc/
+
+# Local smoke-test SQLite databases
+apps/argue-api/db/*.sqlite
+apps/argue-api/db/*.sqlite-*
+
+# pr-fetcher tests are .ts only; reject any compiled emit
+packages/pr-fetcher/tests/*.test.js
+packages/pr-fetcher/tests/*.test.d.ts

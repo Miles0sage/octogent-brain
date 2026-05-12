@@ -31,8 +31,10 @@ describe("POST /argue", () => {
     const body = await res.json() as { id: string; status: string };
     expect(body.id).toMatch(/^[a-z0-9]{12}$/);
     expect(body.status).toBe("queued");
-    const row = db.query("SELECT * FROM arguments WHERE id = ?").get(body.id);
+    const row = db.query("SELECT * FROM arguments WHERE id = ?").get(body.id) as { pr_sha: string; diff_truncated: string };
     expect(row).toBeTruthy();
+    expect(row.pr_sha).toBe("");
+    expect(row.diff_truncated).toBe("");
   });
 
   it("rejects non-PR github URL with 400", async () => {
@@ -43,5 +45,27 @@ describe("POST /argue", () => {
     });
     const res = await handleArguePost(req, db, { skipFetch: true });
     expect(res.status).toBe(400);
+  });
+
+  it("reuses an active queued row for the same PR URL", async () => {
+    const url = "https://github.com/anthropics/sdk-python/pull/1";
+    const first = new Request("http://localhost/argue", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+      headers: { "content-type": "application/json" },
+    });
+    const second = new Request("http://localhost/argue", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+      headers: { "content-type": "application/json" },
+    });
+
+    const firstRes = await handleArguePost(first, db);
+    const firstBody = await firstRes.json() as { id: string };
+    const secondRes = await handleArguePost(second, db);
+    const secondBody = await secondRes.json() as { id: string; deduped?: boolean };
+
+    expect(secondBody.id).toBe(firstBody.id);
+    expect(secondBody.deduped).toBe(true);
   });
 });

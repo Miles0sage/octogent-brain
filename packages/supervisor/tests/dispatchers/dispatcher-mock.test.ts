@@ -11,7 +11,14 @@ const INPUT = { diff: "x", description: "y", ciStatus: "none", darwin_priors: []
 const OK_OUT = `{"decision":"REJECT","issues":[{"severity":"high","message":"problem","diff_lines":[1,5]}],"reasoning":"caught"}`;
 
 function makeRunner(stdout: string, durationMs = 50): () => Promise<SpawnResult> {
-  return vi.fn().mockResolvedValue({ stdout, stderr: "", exitCode: 0, durationMs });
+  return vi.fn().mockResolvedValue({
+    stdout,
+    stderr: "",
+    exitCode: 0,
+    signal: null,
+    timedOut: false,
+    durationMs,
+  });
 }
 
 describe("dispatchers (mocked subprocess)", () => {
@@ -27,13 +34,16 @@ describe("dispatchers (mocked subprocess)", () => {
       expect(v.cli).toBe(expectedCli);
       expect(v.decision).toBe("REJECT");
       expect(v.duration_ms).toBe(50);
+      expect(v.state).toBe("ok");
     });
-    it(`${name} returns synthetic REJECT on parse failure`, async () => {
+
+    it(`${name} returns parse failure on malformed stdout`, async () => {
       const runner = makeRunner("no json here");
       const v = await fn(INPUT, runner);
       expect(v.cli).toBe(expectedCli);
-      expect(v.decision).toBe("REJECT");
-      expect(v.reasoning).toMatch(/extraction error/i);
+      expect(v.decision).toBeNull();
+      expect(v.reasoning).toMatch(/parse failure/i);
+      expect(v.state).toBe("parse_failed");
     });
   }
 });

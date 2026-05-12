@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import * as sqliteVec from "sqlite-vec";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { filterCorpus, embed } from "../src/index";
+import { ensureOracleSchema, filterCorpus, embed } from "../src/index";
 import type { CorpusEntry } from "../src/filter";
 
 const DB_PATH = process.env.ORACLE_DB_PATH ?? "/root/octogent-brain/apps/argue-api/db/argued.sqlite";
@@ -11,16 +11,7 @@ const CORPUS_DIR = process.env.LORE_CORPUS_DIR ?? "/root/claude-brain/dpo-pairs"
 async function main() {
   const db = new Database(DB_PATH);
   sqliteVec.load(db);
-
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS corpus_vec USING vec0(embedding float[768]);
-    CREATE TABLE IF NOT EXISTS corpus_meta (
-      rowid INTEGER PRIMARY KEY,
-      cluster_id TEXT UNIQUE,
-      description TEXT NOT NULL,
-      n_observations INTEGER NOT NULL DEFAULT 1
-    );
-  `);
+  ensureOracleSchema(db);
 
   // Read all daily jsonl files (skip .skipped + .public-corpus variants)
   const files = readdirSync(CORPUS_DIR)
