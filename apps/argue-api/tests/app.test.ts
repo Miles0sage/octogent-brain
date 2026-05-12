@@ -82,6 +82,89 @@ describe("argue-api app routes", () => {
     expect(html).toContain("retry_race");
   });
 
+  it("renders vendor-degraded banner when any verdict is TRANSPORT_FAILED", async () => {
+    db.query(
+      `INSERT INTO arguments (
+        id,
+        pr_url,
+        pr_sha,
+        diff_truncated,
+        pr_title,
+        pr_description,
+        ci_status,
+        darwin_priors_json,
+        status,
+        error_message,
+        created_at,
+        completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'done', null, ?, ?)`
+    ).run(
+      "deadbeef9999",
+      "https://github.com/openai/openai-node/pull/1837",
+      "abc123",
+      "diff --git a/x.ts b/x.ts",
+      "Headers JSON regression",
+      "Fix serializer",
+      "success",
+      "[]",
+      1_700_000_000,
+      1_700_000_120
+    );
+    const transportMsg =
+      "codex transport failed exit 1: ERROR: usage cap reached for chatgpt account. | vendor quota exceeded (retry after 2026-05-13T02:13:00.000Z) | attempts=1";
+    db.query(
+      `INSERT INTO verdicts (argument_id, cli, decision, issues_json, reasoning, cost_usd, duration_ms, gate_pass)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "deadbeef9999",
+      "codex",
+      "TRANSPORT_FAILED",
+      JSON.stringify([{ severity: "error", message: transportMsg }]),
+      "transport failure",
+      0,
+      200,
+      0
+    );
+    db.query(
+      `INSERT INTO verdicts (argument_id, cli, decision, issues_json, reasoning, cost_usd, duration_ms, gate_pass)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "deadbeef9999",
+      "claude-code",
+      "APPROVE",
+      "[]",
+      "looks fine",
+      0,
+      40,
+      1
+    );
+
+    const fetch = createAppFetchHandler(db);
+
+    const jsonRes = await fetch(
+      new Request("http://localhost/api/arguments/deadbeef9999")
+    );
+    const json = (await jsonRes.json()) as {
+      vendorDegraded: Array<{ cli: string; reason: string; retryAfter: string | null }>;
+      summary: { transportFailed: number; consensus: string };
+    };
+    expect(json.summary.transportFailed).toBe(1);
+    expect(json.summary.consensus).toBe("INCOMPLETE");
+    expect(json.vendorDegraded).toHaveLength(1);
+    expect(json.vendorDegraded[0]).toMatchObject({
+      cli: "codex",
+      reason: "vendor quota exceeded",
+      retryAfter: "2026-05-13T02:13:00.000Z",
+    });
+
+    const htmlRes = await fetch(new Request("http://localhost/v/deadbeef9999"));
+    const html = await htmlRes.text();
+    expect(html).toContain("Vendor degraded");
+    expect(html).toContain("One or more CLIs were unreachable");
+    expect(html).toContain("codex");
+    expect(html).toContain("2026-05-13T02:13:00Z");
+  });
+
   it("queues POST /argue through the onQueued callback", async () => {
     const onQueued = vi.fn();
     const fetch = createAppFetchHandler(db, { onQueued });

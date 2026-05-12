@@ -43,6 +43,13 @@ export interface StoredVerdict {
   reasoning: string;
 }
 
+export interface VendorDegradedEntry {
+  cli: string;
+  reason: string;
+  retryAfter: string | null;
+  detail: string;
+}
+
 export interface ArgumentResult {
   completedAt: number | null;
   createdAt: number;
@@ -67,6 +74,7 @@ export interface ArgumentResult {
     transportFailed: number;
     validVerdicts: number;
   };
+  vendorDegraded: VendorDegradedEntry[];
   verdicts: StoredVerdict[];
   ciStatus: string;
 }
@@ -124,6 +132,32 @@ const summarizeVerdicts = (verdicts: StoredVerdict[]) => {
     transportFailed,
     validVerdicts,
   };
+};
+
+const RETRY_AFTER_RE = /retry after (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/;
+const REASON_RE =
+  /(vendor quota exceeded|vendor rate-limited|timed out|spawn-level failure|non-retryable transport failure)/i;
+
+const extractVendorDegraded = (verdicts: StoredVerdict[]): VendorDegradedEntry[] =>
+  verdicts
+    .filter((verdict) => verdict.decision === "TRANSPORT_FAILED")
+    .map((verdict) => {
+      const detail = String(verdict.issues[0]?.["message"] ?? verdict.reasoning);
+      const retryAfter = RETRY_AFTER_RE.exec(detail)?.[1] ?? null;
+      const reason = REASON_RE.exec(detail)?.[1]?.toLowerCase() ?? "transport failure";
+      return {
+        cli: verdict.cli,
+        reason,
+        retryAfter,
+        detail,
+      };
+    });
+
+const formatRetryAfter = (iso: string | null): string | null => {
+  if (!iso) return null;
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().replace(".000Z", "Z");
 };
 
 const matchArgumentId = (pathname: string, prefix: string): string | null => {
@@ -200,6 +234,7 @@ export function loadArgumentResult(db: Db, id: string): ArgumentResult | null {
     prUrl: row.pr_url,
     status: row.status,
     summary: summarizeVerdicts(verdicts),
+    vendorDegraded: extractVendorDegraded(verdicts),
     verdicts,
     ciStatus: row.ci_status ?? "none",
   };
@@ -255,6 +290,25 @@ function verdictClass(decision: VerdictDecision): string {
       return "transport";
   }
 }
+
+const renderVendorDegradedBanner = (result: ArgumentResult): string => {
+  if (result.vendorDegraded.length === 0) return "";
+  const items = result.vendorDegraded
+    .map((entry) => {
+      const retry = formatRetryAfter(entry.retryAfter);
+      const retryFragment = retry
+        ? ` · retry after <time datetime="${escapeHtml(entry.retryAfter ?? "")}">${escapeHtml(retry)}</time>`
+        : "";
+      return `<li><strong>${escapeHtml(entry.cli)}</strong> — ${escapeHtml(entry.reason)}${retryFragment}</li>`;
+    })
+    .join("");
+  return `<section class="section banner-degraded" role="alert">
+        <p class="eyebrow">Vendor degraded</p>
+        <h2>One or more CLIs were unreachable</h2>
+        <p class="lede">Consensus is reported as <strong>INCOMPLETE</strong> because at least one reviewer never replied. This is a vendor availability problem, not a verdict disagreement.</p>
+        <ul class="banner-list">${items}</ul>
+      </section>`;
+};
 
 const renderVerdictCards = (result: ArgumentResult): string =>
   result.verdicts.length === 0
@@ -390,6 +444,13 @@ export function renderArgumentPage(result: ArgumentResult): string {
       .parse h3 { color: var(--parse); }
       .transport h3 { color: var(--transport); }
       .muted { color: var(--muted); }
+      .banner-degraded {
+        border-color: rgba(165, 42, 31, 0.32);
+        background: linear-gradient(180deg, rgba(255, 226, 211, 0.88), rgba(255, 244, 235, 0.92));
+      }
+      .banner-degraded h2 { color: var(--reject); }
+      .banner-list { padding-left: 18px; margin: 12px 0 0; }
+      .banner-list li { margin-bottom: 4px; }
       code, pre {
         font-family: "SFMono-Regular", "SF Mono", "Cascadia Code", "JetBrains Mono", monospace;
       }
@@ -448,6 +509,8 @@ export function renderArgumentPage(result: ArgumentResult): string {
             : ""
         }
       </section>
+
+      ${renderVendorDegradedBanner(result)}
 
       <section class="section">
         <h2>Verdicts</h2>
