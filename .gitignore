@@ -16,3 +16,10 @@
 # L3 audit follow-up: tsbuildinfo files are TS incremental build
 # artifacts — they vary by working tree, never want them committed.
 **/*.tsbuildinfo
+
+# Agent runtime state — oh-my-claudecode session artifacts + per-package
+# learnings logs that subagents write during background dispatches. Local
+# to each worktree, never want them committed.
+.omc/
+**/.omc/
+**/learnings.md
