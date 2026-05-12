@@ -10,6 +10,15 @@ claude-brain runtime that lives next to it on disk.
 
 Upstream is preserved verbatim; everything here is additive.
 
+## Portability note
+
+Paths in this guide use placeholders (`${CLAUDE_BRAIN_ROOT}`,
+`${CLAUDE_USER_ROOT}`, `<octogent-repo>`, etc.) — the env-var table under
+**Configuration** lists the env vars the code actually honors plus their
+defaults. The original author's reference deployment uses `/root/...`, but
+no path in this codebase is hard-coded; everything is configurable via env
+var or CLI flag, and untracked paths are prose placeholders only.
+
 ## What this fork adds
 
 | Surface | Path | Why |
@@ -38,8 +47,9 @@ crashes when the claude-brain stack is absent — this fork still works as plain
 ## claude-brain stack overview
 
 claude-brain is a self-improvement layer for Claude Code that lives at
-`/root/claude-brain` on this host. The full description is in
-`/root/claude-brain/CLAUDE.md`; the short version:
+`${CLAUDE_BRAIN_ROOT}` (default `/root/claude-brain` on the author's box).
+The full description is in `${CLAUDE_BRAIN_ROOT}/CLAUDE.md`; the short
+version:
 
 - **74 standalone skills** under `~/.claude/skills/` plus 11 archived language packs.
 - **6 self-improvement daemons**: `dpo-harvester` (clusters tool-failure events into
@@ -51,8 +61,8 @@ claude-brain is a self-improvement layer for Claude Code that lives at
   / Stop hook event into a SQLite + Vue dashboard.
 - **Per-agent memory scopes** under `~/.claude/agent-memory/<role>/*.md` plus
   `~/.claude/projects/*/memory/MEMORY.md` for project-scoped knowledge.
-- **Lore wiki** at `/root/wikis/ai-agents/wiki/` (66 markdown files, agentic patterns
-  reference).
+- **Lore wiki** at `<lore-wiki-root>` (66 markdown files, agentic patterns
+  reference; the author's deployment uses `/root/wikis/ai-agents/wiki/`).
 
 The integration keeps a clean separation: octogent owns the UI and terminal multiplexing,
 claude-brain owns the data and the self-modification loop. The 3 endpoints in this fork are
@@ -82,17 +92,24 @@ skills automatically with no extra wiring on this fork's side.
 | `HOST` | `127.0.0.1` (upstream) | Bind interface for the API + static frontend. Set to `0.0.0.0` to expose over Tailscale / LAN. |
 | `OCTOGENT_ALLOW_REMOTE_ACCESS` | `0` | When set, the API accepts non-loopback `Host:` and `Origin:` headers. Required when binding to `0.0.0.0`. |
 | `OCTOGENT_NO_OPEN` | unset | Suppress the auto-open browser tab on startup. Useful for headless / VPS hosts. |
-| `CLAUDE_BRAIN_ROOT` | `/root/claude-brain` | Override the claude-brain repo root for the DPO endpoint. |
-| `CLAUDE_USER_ROOT` | `/root/.claude` | Override the per-user Claude state root for the memory endpoint. |
+| `CLAUDE_BRAIN_ROOT` | `/root/claude-brain` | Override the claude-brain repo root for the DPO endpoint. Honored in `apps/api/src/createApiServer/claudeBrainRoutes.ts`. |
+| `CLAUDE_USER_ROOT` | `/root/.claude` | Override the per-user Claude state root for the memory endpoint. Honored in `apps/api/src/createApiServer/claudeBrainRoutes.ts`. |
+| `OCTOGENT_DIR` | `/root/octogent` | Override the octogent repo root for the `bin/spawn-team.sh` and `bin/agency-chart.sh` helpers. Honored in those scripts only. |
 
-Recommended startup for a Tailscale-exposed host:
+The Lore wiki path is not currently configurable through an env var — it is
+referenced only in prose for orientation. If you need to relocate it, point
+the documentation at `<lore-wiki-root>` for your install.
+
+Recommended startup for a Tailscale-exposed host (replace `<your-project>`
+with the absolute path to the project you want octogent to open against,
+and `<octogent-repo>` with the absolute path to this fork's clone):
 
 ```bash
-cd /root/briefingdeck && \
+cd <your-project> && \
   HOST=0.0.0.0 \
   OCTOGENT_ALLOW_REMOTE_ACCESS=1 \
   OCTOGENT_NO_OPEN=1 \
-  nohup node /root/octogent/bin/octogent > /tmp/octogent.log 2>&1 &
+  nohup node <octogent-repo>/bin/octogent > /tmp/octogent.log 2>&1 &
 ```
 
 ## Specialized Agent Layer
@@ -110,13 +127,13 @@ Octogent's `terminal create` API can spawn role-specialized Claude Code instance
 ### Spawn helper
 
 ```bash
-bash /root/octogent/bin/spawn-team.sh \
+bash "${OCTOGENT_DIR}/bin/spawn-team.sh" \
   --topic "implement D9 4-format audio styles" \
   --tentacle audio \
   --roles "research,builder,reviewer"
 ```
 
-Spawns a parent coordinator (upstream `swarm-parent` template) plus one child per role using the matching `bd-<role>` prompt template at `/root/octogent/prompts/`. Use `--dry-run` to preview the `terminal create` invocations.
+Spawns a parent coordinator (upstream `swarm-parent` template) plus one child per role using the matching `bd-<role>` prompt template at `${OCTOGENT_DIR}/prompts/`. Use `--dry-run` to preview the `terminal create` invocations.
 
 ### Auto-research loop (Karpathy-style)
 
@@ -139,15 +156,15 @@ Adapted from [VRSEN/agency-swarm](https://github.com/VRSEN/agency-swarm) (MIT). 
 
 | Lift | What it is | File |
 |---|---|---|
-| **`agency_chart`** | A first-class declarative JSON topology — `entryPoints`, `flows: [{from, to}]`, `sharedInstructions`. Diffable, versionable, validated. | `packages/core/src/domain/agencyChart.ts`, example at `/root/briefingdeck/.octogent/agency-chart.json` |
+| **`agency_chart`** | A first-class declarative JSON topology — `entryPoints`, `flows: [{from, to}]`, `sharedInstructions`. Diffable, versionable, validated. | `packages/core/src/domain/agencyChart.ts`, example at `<your-project>/.octogent/agency-chart.json` |
 | **Voting coordinator** | New prompt template `swarm-vote-parent.md` that fans one question to every specialist, scores replies on groundedness + specificity + cost, picks the winner, writes a JSON artifact. | `prompts/swarm-vote-parent.md` |
-| **`AGENCY.md` shared instructions** | One markdown file prepended to every specialist's system prompt at spawn time. Carries mission + toolchain + DONE/BLOCKED contract. Mirrors agency-swarm's `shared_instructions=...` semantics from `agency/core.py:152-161`. | `/root/briefingdeck/.octogent/AGENCY.md` |
+| **`AGENCY.md` shared instructions** | One markdown file prepended to every specialist's system prompt at spawn time. Carries mission + toolchain + DONE/BLOCKED contract. Mirrors agency-swarm's `shared_instructions=...` semantics from `agency/core.py:152-161`. | `<your-project>/.octogent/AGENCY.md` |
 
 ### CLI surface
 
 ```bash
 # Validate a chart before spawning.
-bash bin/agency-chart.sh --validate /root/briefingdeck/.octogent/agency-chart.json
+bash bin/agency-chart.sh --validate <your-project>/.octogent/agency-chart.json
 
 # Spawn a vote team. Coord uses swarm-vote-parent; chart is validated first.
 bash bin/spawn-team.sh \
@@ -155,7 +172,7 @@ bash bin/spawn-team.sh \
   --tentacle agents \
   --roles "research,builder,reviewer,synthesizer,planner" \
   --vote \
-  --chart /root/briefingdeck/.octogent/agency-chart.json
+  --chart <your-project>/.octogent/agency-chart.json
 ```
 
 `--dry-run --vote` prints the channel-send commands the coord would issue, without spawning live Claude Code processes — safe for CI / smoke tests.
