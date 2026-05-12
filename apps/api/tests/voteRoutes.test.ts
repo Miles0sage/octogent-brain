@@ -328,8 +328,14 @@ describe("voteRoutes H3: fan-out cap + dedup + per-voter try/catch", () => {
 //     in-memory; we reset between tests via resetAuthState().
 describe("voteRoutes C1: bearer-token auth + per-IP rate limit", () => {
   let prevKey: string | undefined;
+  let prevAllowRemote: string | undefined;
   beforeEach(async () => {
     prevKey = process.env.OCTOGENT_API_KEY;
+    prevAllowRemote = process.env.OCTOGENT_ALLOW_REMOTE_ACCESS;
+    // Tests in this block exercise the strict default (loopback-only
+    // when no key is set). The OCTOGENT_ALLOW_REMOTE_ACCESS=1 escape
+    // hatch for single-user dev VPS is a separate concern.
+    delete process.env.OCTOGENT_ALLOW_REMOTE_ACCESS;
     const { resetAuthState } = await import("../src/createApiServer/security");
     resetAuthState();
   });
@@ -338,6 +344,11 @@ describe("voteRoutes C1: bearer-token auth + per-IP rate limit", () => {
       delete process.env.OCTOGENT_API_KEY;
     } else {
       process.env.OCTOGENT_API_KEY = prevKey;
+    }
+    if (prevAllowRemote === undefined) {
+      delete process.env.OCTOGENT_ALLOW_REMOTE_ACCESS;
+    } else {
+      process.env.OCTOGENT_ALLOW_REMOTE_ACCESS = prevAllowRemote;
     }
     const { resetAuthState } = await import("../src/createApiServer/security");
     resetAuthState();
@@ -353,6 +364,19 @@ describe("voteRoutes C1: bearer-token auth + per-IP rate limit", () => {
     const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
     expect(handled).toBe(true);
     expect(ctx.responseStub.status).toBe(401);
+  });
+
+  it("allows LAN access when OCTOGENT_ALLOW_REMOTE_ACCESS=1 (single-user dev VPS escape hatch)", async () => {
+    delete process.env.OCTOGENT_API_KEY;
+    process.env.OCTOGENT_ALLOW_REMOTE_ACCESS = "1";
+    const ctx = buildPost(
+      "http://x.test/api/claude-brain/votes/dispatch",
+      { taskInput: "verify", dryRun: true },
+      { remoteAddress: "192.168.1.42" },
+    );
+    const handled = await handleVoteDispatchRoute(ctx, buildRouteDeps());
+    expect(handled).toBe(true);
+    expect(ctx.responseStub.status).toBe(200);
   });
 
   it("allows loopback access with 200 when OCTOGENT_API_KEY is unset", async () => {

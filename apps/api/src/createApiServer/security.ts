@@ -81,12 +81,18 @@ export const checkAuthorizedRequest = (request: IncomingMessage): AuthOutcome =>
   const isLoopback = isLoopbackRemoteAddress(remoteAddress);
 
   if (apiKey === null) {
-    // No key configured → loopback-only.
-    if (!isLoopback) {
+    // No key configured. Default = loopback-only. Override when the
+    // operator explicitly opts in via OCTOGENT_ALLOW_REMOTE_ACCESS=1 —
+    // this is the same flag they already set to bind the server on
+    // 0.0.0.0, so it's not a stealth widening. Single-user dev VPS
+    // pattern: the user IS the LAN. Production deployments should set
+    // OCTOGENT_API_KEY instead.
+    const allowRemote = process.env.OCTOGENT_ALLOW_REMOTE_ACCESS === "1";
+    if (!isLoopback && !allowRemote) {
       return {
         ok: false,
         status: 401,
-        reason: "OCTOGENT_API_KEY is required for non-loopback access",
+        reason: "OCTOGENT_API_KEY is required for non-loopback access (or set OCTOGENT_ALLOW_REMOTE_ACCESS=1 for a single-user dev box)",
       };
     }
   } else {
