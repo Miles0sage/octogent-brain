@@ -7,6 +7,15 @@ in this repository are documented here. This project adheres to
 
 ## [Unreleased]
 
+- **P0 fix:** gate all read-only `/api/claude-brain/*` routes behind C1
+  auth (closes reviewer audit). 10 handlers in `claudeBrainRoutes.ts` +
+  `trajectoryRoutes.ts` (daemons, dpo-recent, memory, agent-teams,
+  review-fixtures{,/:name}, review-gate, rollouts{,/:id}, rewards/recent)
+  now call `checkAuthorizedRequest` after the pathname/method match.
+  Loopback default + `OCTOGENT_API_KEY`-bearer contract unchanged from
+  the POST routes; this fix closes the leak under
+  `OCTOGENT_ALLOW_REMOTE_ACCESS=1` without an API key.
+
 ## [0.2.0] - 2026-05-12
 
 ### Added (wave 1 — types only, no api wiring yet)

@@ -35,10 +35,18 @@ const buildResponse = (): ResponseLike => {
   };
 };
 
+// L3 audit r3 P0 (2026-05-12): each handler now calls
+// checkAuthorizedRequest, which reads request.socket.remoteAddress. The
+// suite runs with no OCTOGENT_API_KEY set, so requests appear to
+// originate from loopback (127.0.0.1) and the gate passes through.
 const buildRequest = (url: string) => {
   const response = buildResponse();
   return {
-    request: { method: "GET" } as unknown as import("node:http").IncomingMessage,
+    request: {
+      method: "GET",
+      headers: {},
+      socket: { remoteAddress: "127.0.0.1" },
+    } as unknown as import("node:http").IncomingMessage,
     response: response as unknown as import("node:http").ServerResponse,
     responseStub: response,
     requestUrl: new URL(url),
@@ -264,7 +272,11 @@ describe("claude-brain agent-teams route", () => {
     const ctx = buildRequest("http://x.test/api/claude-brain/agent-teams");
     const postCtx = {
       ...ctx,
-      request: { method: "POST" } as unknown as import("node:http").IncomingMessage,
+      request: {
+        method: "POST",
+        headers: {},
+        socket: { remoteAddress: "127.0.0.1" },
+      } as unknown as import("node:http").IncomingMessage,
     };
     const handled = await handleClaudeBrainAgentTeamsRoute(postCtx, {} as never);
     expect(handled).toBe(true);
@@ -356,9 +368,13 @@ describe("claude-brain review-fixtures + review-gate routes", () => {
     const stream = (async function* () {
       for (const chunk of chunks) yield chunk;
     })();
+    // L3 audit r3 P0 (2026-05-12): include socket on the POST request
+    // so the new checkAuthorizedRequest gate sees loopback (no key
+    // configured in this suite, so loopback default = pass-through).
     const fakeRequest = Object.assign(stream, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      socket: { remoteAddress: "127.0.0.1" },
     });
     return {
       ...ctx,

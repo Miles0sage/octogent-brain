@@ -202,17 +202,33 @@ describe("e2e: auth gate (OCTOGENT_API_KEY enforcement)", () => {
     expect(Array.isArray(r.body.entries)).toBe(true);
   });
 
-  it("Non-gated routes (daemons, drivers list) are NOT auth-gated", async () => {
-    // The /drivers GET route + /daemons + /memory etc. are intentionally
-    // unauthenticated so the dashboard can render status panels without
-    // forcing the user to thread a token through every read. This test
-    // pins that contract — if a future patch over-gates them, this test
-    // will catch the regression.
-    const daemons = await httpRequest(
+  it("/api/claude-brain/daemons IS auth-gated (P0 closure) — 401 without bearer, 200 with", async () => {
+    // L3 audit r3 P0 (2026-05-12): the read-only daemons handler
+    // previously bypassed the auth gate. Under
+    // OCTOGENT_ALLOW_REMOTE_ACCESS=1 with no API key this leaked the
+    // systemd daemon list to every non-loopback caller. Lane-A's
+    // original assertion (200 without bearer) pinned the *bug*; this
+    // updated assertion pins the *fix*. Other read-only handlers
+    // (memory, agent-teams, rollouts, rewards, …) share the same
+    // contract and are covered by tests/claudeBrainAuth.test.ts.
+    const daemonsUnauth = await httpRequest(
       server!.baseUrl,
       "/api/claude-brain/daemons",
     );
-    expect(daemons.status).toBe(200);
+    expect(daemonsUnauth.status).toBe(401);
+    const daemonsAuth = await httpRequest(
+      server!.baseUrl,
+      "/api/claude-brain/daemons",
+      { headers: { authorization: `Bearer ${TEST_KEY}` } },
+    );
+    expect(daemonsAuth.status).toBe(200);
+  });
+
+  it("/api/claude-brain/drivers GET stays ungated (read-only driver list, no host state)", async () => {
+    // driverRoutes.ts gates /drivers/dispatch (state-changing) but
+    // intentionally leaves the GET list ungated — it's static driver
+    // metadata, not host telemetry. This test pins that asymmetry so a
+    // future scope-creep change doesn't accidentally close it.
     const drivers = await httpRequest(server!.baseUrl, "/api/claude-brain/drivers");
     expect(drivers.status).toBe(200);
   });

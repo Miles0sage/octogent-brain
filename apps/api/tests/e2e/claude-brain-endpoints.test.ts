@@ -11,17 +11,24 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { bootApiServer, httpRequest, type BootedApiServer } from "./helpers";
 
+// L3 audit r3 P0 (2026-05-12): the 10 read-only handlers below were
+// flipped gated=false → gated=true. They run C1 auth on every request
+// now. Suite still passes with OCTOGENT_API_KEY=null because the boot
+// helper binds 127.0.0.1, and checkAuthorizedRequest passes loopback
+// without a key. /api/claude-brain/drivers (GET) stays ungated by
+// design — it returns static driver metadata, not host telemetry, and
+// only /drivers/dispatch (POST) walks the C1 path.
 const CLAUDE_BRAIN_ENDPOINTS = [
-  { path: "/api/claude-brain/daemons", method: "GET", gated: false },
-  { path: "/api/claude-brain/dpo-recent", method: "GET", gated: false },
-  { path: "/api/claude-brain/memory", method: "GET", gated: false },
-  { path: "/api/claude-brain/rollouts", method: "GET", gated: false },
-  { path: "/api/claude-brain/rollouts/:id", method: "GET", gated: false },
-  { path: "/api/claude-brain/rewards/recent", method: "GET", gated: false },
-  { path: "/api/claude-brain/agent-teams", method: "GET", gated: false },
-  { path: "/api/claude-brain/review-fixtures", method: "GET", gated: false },
-  { path: "/api/claude-brain/review-fixtures/:name", method: "GET", gated: false },
-  { path: "/api/claude-brain/review-gate", method: "POST", gated: false },
+  { path: "/api/claude-brain/daemons", method: "GET", gated: true },
+  { path: "/api/claude-brain/dpo-recent", method: "GET", gated: true },
+  { path: "/api/claude-brain/memory", method: "GET", gated: true },
+  { path: "/api/claude-brain/rollouts", method: "GET", gated: true },
+  { path: "/api/claude-brain/rollouts/:id", method: "GET", gated: true },
+  { path: "/api/claude-brain/rewards/recent", method: "GET", gated: true },
+  { path: "/api/claude-brain/agent-teams", method: "GET", gated: true },
+  { path: "/api/claude-brain/review-fixtures", method: "GET", gated: true },
+  { path: "/api/claude-brain/review-fixtures/:name", method: "GET", gated: true },
+  { path: "/api/claude-brain/review-gate", method: "POST", gated: true },
   { path: "/api/claude-brain/drivers", method: "GET", gated: false },
   { path: "/api/claude-brain/drivers/dispatch", method: "POST", gated: true },
   { path: "/api/claude-brain/votes/dispatch", method: "POST", gated: true },
