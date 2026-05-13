@@ -63,6 +63,32 @@ not Windows-tested. To regenerate: `cd src && bash build-all.sh`.
   on the native Node `spawn` path because aider does not stream JSON
   events in a wrapper-compatible shape.
 
+## Safety posture — do not swap argued.dev dispatchers as of v0.3.1
+
+A live probe on 2026-05-13 confirmed the wrapper invokes codex with
+`codex e --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
+(see `src/executor.go`). argued.dev's native dispatcher at
+`packages/supervisor/src/dispatchers/codex.ts` uses
+`codex exec -s read-only --skip-git-repo-check` — strictly more
+restrictive. For PR review the read-only sandbox is the correct posture,
+so swapping codex.ts to use the wrapper would be a privilege escalation
+that buys no functionality.
+
+Same caveat likely applies to the wrapper's claude and gemini backends —
+they default to permissive arg sets tuned for the arena-workflow code
+generation use case, not for the adversarial-review use case argued.dev
+is wired for. Probe before swapping.
+
+Conclusion: wrapper-runner stays a library, exercised in tests, ready
+for v0.4 once one of:
+  (a) we patch the wrapper to honor an env-flagged read-only mode,
+  (b) we maintain a small fork of `src/executor.go` under
+      `vendor/codeagent-wrapper/src-octogent-patches/`,
+  (c) we add per-backend safer-arg overrides at the wrapper-runner
+      layer (force `--`-style argv injection before stdin payload).
+
+None of those are blocking v0.3.x. The native dispatchers do the job.
+
 ## Update protocol
 
 When pulling a newer arena commit:
