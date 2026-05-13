@@ -28,7 +28,7 @@ export async function fetchPR(url: string, token?: string): Promise<PRPayload> {
     sha: pr.data.head.sha,
     title: pr.data.title,
     description: pr.data.body ?? "",
-    diff: truncateDiff(diffResp.data as unknown as string),
+    diff: diffResp.data as unknown as string,
     ciStatus,
   };
 }

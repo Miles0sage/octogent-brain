@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ArgueInput, CliName } from "../argue";
+import { prepareCliDiff } from "../diff-strategy";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DEFAULT_PROMPTS_DIR = join(PACKAGE_ROOT, "prompts");
@@ -42,7 +43,10 @@ function fillBaseTemplate(input: ArgueInput): string {
 }
 
 export function buildArguePrompt(input: ArgueInput, cli?: CliName): string {
-  const base = fillBaseTemplate(input);
+  const dispatchInput: ArgueInput = cli
+    ? { ...input, diff: prepareCliDiff(cli, input.diff) }
+    : input;
+  const base = fillBaseTemplate(dispatchInput);
   if (!cli) return base;
   const cliStrengths = readPrompt(`${cli}/reviewer.md`);
   return `${cliStrengths}\n\n---\n\n${base}`;

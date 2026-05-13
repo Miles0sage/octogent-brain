@@ -69,7 +69,7 @@ These were already debated + locked. Reverting them costs a refactor cycle (alre
 4. **Env: `GOOGLE_API_KEY ?? GEMINI_API_KEY`** — code accepts both. GEMINI_API_KEY is what's exported on this host.
 5. **CLI dispatchers use injectable `runner`** — for testability without subprocess spawns. Live runner = `runProcess` from `spawn-helper.ts`. Mock runner = `vi.fn().mockResolvedValue(...)`.
 6. **Citation enforcement** — every issue MUST include `diff_lines: [start, end]` or `darwin_pattern_id: string`. Naked APPROVE/REJECT = `gate_pass: false`, decision rewritten to `GATE_FAILED` in pipeline.
-7. **2k token diff cap** — `truncateDiff()` caps at 8000 chars + appends `[diff continues - truncated at 2k tokens]`.
+7. ~~**2k token diff cap** — `truncateDiff()` caps at 8000 chars + appends `[diff continues - truncated at 2k tokens]`.~~ **OVERRIDDEN 2026-05-13 by Amendment A1** (NotebookLM review): per-CLI diff strategy. claude-code + codex see full diff; aider + gemini-cli see structural summary via `prepareCliDiff()` in `packages/supervisor/src/diff-strategy.ts`. Pipeline now stores full diff. See spec `## Amendments — 2026-05-13` section for the full diff.
 8. **Argument ID format** — nanoid Crockford alphabet, length 12, regex `/^[a-z0-9]{12}$/`.
 
 ## Corpus reality check (matters for launch narrative)
