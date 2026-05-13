@@ -279,6 +279,162 @@ describe("pipeline", () => {
     expect(row.completed_at).toBe(1_700_000_100);
   });
 
+  // Test helper: a dispatch mock whose verdicts are gated. drainAll() flushes
+  // every pending release and keeps flushing as new ones arrive from drained
+  // pipelines, until the scheduler is idle.
+  function gatedDispatch() {
+    const releases: Array<() => void> = [];
+    const dispatch = vi.fn((cli: string) => {
+      const promise = new Promise<any>((resolve) => {
+        releases.push(() =>
+          resolve({
+            cli,
+            decision: "REJECT",
+            issues: [{ severity: "high", message: "x", diff_lines: [1, 2] as [number, number] }],
+            reasoning: "ok",
+            cost_usd: 0,
+            duration_ms: 1,
+            state: "ok",
+          })
+        );
+      });
+      return promise;
+    });
+    const flushOnce = () => {
+      while (releases.length) releases.shift()!();
+    };
+    const drainAll = async (scheduler: { inFlightCount: () => number; waitForIdle: () => Promise<void> }) => {
+      while (releases.length > 0 || scheduler.inFlightCount() > 0) {
+        flushOnce();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await scheduler.waitForIdle();
+    };
+    return { dispatch, releases, drainAll };
+  }
+
+  function insertQueued(db: Db, id: string, urlSuffix: string) {
+    db.query(
+      `INSERT INTO arguments (id, pr_url, pr_sha, diff_truncated, pr_title, pr_description, ci_status, status, created_at)
+       VALUES (?, ?, ?, ?, ?, '', 'none', 'queued', unixepoch())`
+    ).run(id, `${FIXTURE.url}?k=${urlSuffix}`, FIXTURE.sha, FIXTURE.diff, FIXTURE.title);
+  }
+
+  it("schedule respects ARGUED_MAX_CONCURRENT cap and leaves overflow queued", async () => {
+    process.env.ARGUED_MAX_CONCURRENT = "2";
+    for (const id of ["q01", "q02", "q03", "q04"]) insertQueued(db, id, id);
+
+    const { dispatch, drainAll } = gatedDispatch();
+    const scheduler = createPipelineScheduler(db, {
+      dispatch,
+      fetchPR: vi.fn(async () => FIXTURE),
+      lookupPriors: vi.fn(async () => []),
+      now: () => 1_700_000_300,
+    });
+
+    for (const id of ["q01", "q02", "q03", "q04"]) scheduler.schedule(id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(scheduler.inFlightCount()).toBe(2);
+    const mid = db
+      .query("SELECT id, status FROM arguments WHERE id IN ('q01','q02','q03','q04') ORDER BY id")
+      .all() as Array<{ id: string; status: string }>;
+    expect(mid.filter((r) => r.status === "running")).toHaveLength(2);
+    expect(mid.filter((r) => r.status === "queued")).toHaveLength(2);
+
+    await drainAll(scheduler);
+
+    const final = db
+      .query("SELECT id, status FROM arguments WHERE id IN ('q01','q02','q03','q04') ORDER BY id")
+      .all() as Array<{ id: string; status: string }>;
+    expect(final.every((r) => r.status === "done")).toBe(true);
+    delete process.env.ARGUED_MAX_CONCURRENT;
+  });
+
+  it("drains exactly one queued row per in-flight completion", async () => {
+    process.env.ARGUED_MAX_CONCURRENT = "1";
+    for (const id of ["d01", "d02", "d03"]) insertQueued(db, id, id);
+
+    const { dispatch, releases, drainAll } = gatedDispatch();
+    const scheduler = createPipelineScheduler(db, {
+      dispatch,
+      fetchPR: vi.fn(async () => FIXTURE),
+      lookupPriors: vi.fn(async () => []),
+      now: () => 1_700_000_400,
+    });
+
+    for (const id of ["d01", "d02", "d03"]) scheduler.schedule(id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(scheduler.inFlightCount()).toBe(1);
+
+    // release all 4 CLI dispatches for d01 only; do NOT keep flushing
+    while (releases.length) releases.shift()!();
+    // give event loop ticks for runPipeline to complete + drain() to fire
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // d01 done, d02 picked up by drain (its 4 CLI dispatches now pending), d03 still queued
+    expect(scheduler.inFlightCount()).toBe(1);
+    const midStatuses = db
+      .query("SELECT id, status FROM arguments WHERE id IN ('d01','d02','d03') ORDER BY id")
+      .all() as Array<{ id: string; status: string }>;
+    expect(midStatuses).toEqual([
+      { id: "d01", status: "done" },
+      { id: "d02", status: "running" },
+      { id: "d03", status: "queued" },
+    ]);
+
+    await drainAll(scheduler);
+
+    const final = db
+      .query("SELECT id, status FROM arguments WHERE id IN ('d01','d02','d03') ORDER BY id")
+      .all() as Array<{ id: string; status: string }>;
+    expect(final.every((r) => r.status === "done")).toBe(true);
+    delete process.env.ARGUED_MAX_CONCURRENT;
+  });
+
+  it("resumePending respects the concurrency cap with many queued rows", async () => {
+    process.env.ARGUED_MAX_CONCURRENT = "2";
+    for (const id of ["r01", "r02", "r03", "r04", "r05"]) insertQueued(db, id, id);
+
+    const { dispatch, drainAll } = gatedDispatch();
+    const scheduler = createPipelineScheduler(db, {
+      dispatch,
+      fetchPR: vi.fn(async () => FIXTURE),
+      lookupPriors: vi.fn(async () => []),
+      now: () => 1_700_000_500,
+    });
+
+    scheduler.resumePending();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(scheduler.inFlightCount()).toBe(2);
+
+    await drainAll(scheduler);
+    delete process.env.ARGUED_MAX_CONCURRENT;
+  });
+
+  it("hard-caps ARGUED_MAX_CONCURRENT at 8 even when env asks for more", async () => {
+    process.env.ARGUED_MAX_CONCURRENT = "999";
+    for (let i = 0; i < 10; i++) {
+      const id = `h${i.toString().padStart(2, "0")}`;
+      insertQueued(db, id, id);
+    }
+
+    const { dispatch, drainAll } = gatedDispatch();
+    const scheduler = createPipelineScheduler(db, {
+      dispatch,
+      fetchPR: vi.fn(async () => FIXTURE),
+      lookupPriors: vi.fn(async () => []),
+      now: () => 1_700_000_600,
+    });
+
+    scheduler.resumePending();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(scheduler.inFlightCount()).toBe(8);
+
+    await drainAll(scheduler);
+    delete process.env.ARGUED_MAX_CONCURRENT;
+  });
+
   it("requeues interrupted jobs and schedules all queued ids", async () => {
     db.query(
       `INSERT INTO arguments (id, pr_url, pr_sha, diff_truncated, pr_title, pr_description, ci_status, status, created_at)

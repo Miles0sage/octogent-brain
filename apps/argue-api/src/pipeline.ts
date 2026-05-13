@@ -354,16 +354,38 @@ export function loadQueuedArgumentIds(db: Db): string[] {
   ).map((row) => row.id);
 }
 
+const DEFAULT_MAX_CONCURRENT = 3;
+const HARD_CAP_MAX_CONCURRENT = 8;
+
+const resolveMaxConcurrent = (): number => {
+  const raw = process.env.ARGUED_MAX_CONCURRENT;
+  if (!raw) return DEFAULT_MAX_CONCURRENT;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_CONCURRENT;
+  return Math.min(parsed, HARD_CAP_MAX_CONCURRENT);
+};
+
 export function createPipelineScheduler(
   db: Db,
   deps: PipelineDeps = {}
 ): PipelineScheduler {
   const inFlight = new Map<string, Promise<void>>();
   const logger = deps.logger ?? console;
+  const maxConcurrent = resolveMaxConcurrent();
 
-  const launch = (id: string): Promise<void> => {
+  const drain = (): void => {
+    if (inFlight.size >= maxConcurrent) return;
+    for (const id of loadQueuedArgumentIds(db)) {
+      if (inFlight.size >= maxConcurrent) break;
+      if (inFlight.has(id)) continue;
+      launch(id);
+    }
+  };
+
+  const launch = (id: string): Promise<void> | undefined => {
     const existing = inFlight.get(id);
     if (existing) return existing;
+    if (inFlight.size >= maxConcurrent) return undefined;
 
     const job = runPipeline(id, db, deps)
       .catch((error) => {
@@ -371,6 +393,7 @@ export function createPipelineScheduler(
       })
       .finally(() => {
         inFlight.delete(id);
+        drain();
       });
 
     inFlight.set(id, job);
@@ -381,15 +404,15 @@ export function createPipelineScheduler(
     inFlightCount: () => inFlight.size,
     resumePending() {
       requeueInterruptedArguments(db);
-      for (const id of loadQueuedArgumentIds(db)) {
-        void launch(id);
-      }
+      drain();
     },
     schedule(id: string) {
-      void launch(id);
+      launch(id);
     },
-    waitForIdle() {
-      return Promise.all([...inFlight.values()]).then(() => undefined);
+    async waitForIdle() {
+      while (inFlight.size > 0) {
+        await Promise.all([...inFlight.values()]);
+      }
     },
   };
 }
