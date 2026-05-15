@@ -10,11 +10,7 @@
   "bin": {
     "octogent": "./bin/octogent"
   },
-  "files": [
-    "bin",
-    "dist",
-    "README.md"
-  ],
+  "files": ["bin", "dist", "README.md"],
   "scripts": {
     "start": "pnpm dev",
     "dev": "node scripts/dev.mjs",
@@ -35,5 +31,6 @@
     "knip": "^6.3.1",
     "typescript": "^5.8.2",
     "vitest": "^3.0.7"
-  }
+  },
+  "workspaces": ["apps/*", "packages/*"]
 }

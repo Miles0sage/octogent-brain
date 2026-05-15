@@ -1,0 +1,24 @@
+{
+  "name": "@octogent/argue-api",
+  "version": "0.3.0-pre.1",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "smoke:real-seeded": "bun scripts/smoke-real-pr.ts",
+    "release:gate": "bun scripts/release-gate.ts",
+    "test": "bun --bun x vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@octogent/pr-fetcher": "workspace:*",
+    "nanoid": "^5.1.11",
+    "sqlite-vec": "^0.1.9",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "msw": "^2.6.0",
+    "vitest": "^4.1.6"
+  }
+}

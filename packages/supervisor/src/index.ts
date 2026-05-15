@@ -70,3 +70,23 @@ export {
   type VoteOutcome,
   type VoterVerdict,
 } from "./vote";
+
+export { argue, CLIS } from "./argue";
+export type {
+  CliName,
+  RawVerdict,
+  RawVerdictState,
+  VerdictDecision,
+  IssueCitation,
+  Prior,
+  ArgueInput,
+  ArgueOpts,
+} from "./argue";
+
+export { dispatchAll } from "./dispatchers";
+
+export {
+  parseDispatchMode,
+  pickClisForMode,
+  type DispatchMode,
+} from "./dispatch-mode";

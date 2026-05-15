@@ -1,0 +1,3 @@
+{"cluster_id":"errcls_a","description":"race condition in async retry handler that breaks under load","error_class":"race","n_observations":7}
+{"cluster_id":"errcls_b","description":"short","error_class":"weird","n_observations":2}
+{"cluster_id":"errcls_c","description":"auth token rejected upstream returns 401 invalid api key error","error_class":"auth_error","n_observations":12}

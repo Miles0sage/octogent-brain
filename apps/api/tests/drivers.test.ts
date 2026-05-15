@@ -42,10 +42,20 @@ const buildResponse = (): ResponseLike => ({
   },
 });
 
-const buildGet = (url: string) => {
+const buildGet = (
+  url: string,
+  options: { headers?: Record<string, string>; remoteAddress?: string } = {},
+) => {
   const response = buildResponse();
   return {
-    request: { method: "GET" } as unknown as import("node:http").IncomingMessage,
+    request: {
+      method: "GET",
+      headers: { ...(options.headers ?? {}) },
+      // codex audit 2026-05-12: GET /drivers now goes through the same
+      // checkAuthorizedRequest gate as POST /drivers/dispatch. Default to
+      // loopback so existing tests pass; override for rejection cases.
+      socket: { remoteAddress: options.remoteAddress ?? "127.0.0.1" },
+    } as unknown as import("node:http").IncomingMessage,
     response: response as unknown as import("node:http").ServerResponse,
     responseStub: response,
     requestUrl: new URL(url),

@@ -31,13 +31,10 @@
     "anthropic",
     "octogent"
   ],
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
+  "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
+    "prebuild:dist": "pnpm --dir ../core build:dist",
     "build:dist": "tsc -p tsconfig.build.json",
     "prepublishOnly": "pnpm build:dist",
     "test": "vitest run"
